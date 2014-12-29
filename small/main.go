@@ -22,6 +22,7 @@ import (
 )
 
 const testing = false
+const debug = true
 
 type Server struct {
 	Id int
@@ -310,6 +311,7 @@ const timeout = 3*time.Second
 func (session *Session) Start(connChan <-chan Connection,
 		replyConn net.Conn, close chan<- Nonce) {
 
+	connectStart := time.Now()
 	context := session.Context
 	for i := context.Mine + 1; i < context.N; i++ {
 		server := context.Servers[i]
@@ -331,16 +333,18 @@ func (session *Session) Start(connChan <-chan Connection,
 		connection := <- connChan
 		session.Conns[connection.Message.Id] = connection.Conn
 	}
+	connect := time.Since(connectStart)
 
 	// no more connections for this session, notify
 	// the main loop to clean up the map
 	close <- session.Nonce
 
 	// everyone's all wired up, so start the protocol
-	fmt.Printf("Session Nonce: %s\n", session.Nonce.String())
+	generate := 0 * time.Millisecond
 	for i := 0; i < session.Values; i++ {
+		generateStart := time.Now()
 		value := session.GenerateRandom()
-		fmt.Printf("\tValue: %s\n", value.String())
+		generate += time.Since(generateStart)
 		if replyConn != nil {
 			if _, err := replyConn.Write(value.Encode()); err != nil {
 				panic("reply send: " + err.Error())
@@ -351,6 +355,11 @@ func (session *Session) Start(connChan <-chan Connection,
 		if err := replyConn.Close(); err != nil {
 			panic("reply close: " + err.Error())
 		}
+	}
+	if debug {
+		format := "[%d, %d] Setup: %s, Generate: %d values, %s/value\n"
+		fmt.Printf(format, context.N, context.K, connect,
+				session.Values, generate)
 	}
 }
 
@@ -480,10 +489,15 @@ func startServer(context *Context) {
 }
 
 func main() {
-	id := flag.Int("server", -1, "Start server number n")
+	n := flag.Int("n", 3, "number of servers")
+	k := flag.Int("k", 3, "share threshold")
 	flag.Parse()
-	if *id < 0 {
-		panic("must specify -server=n")
+	if flag.NArg() < 1 {
+		panic("must specify server index")
+	}
+	id, err := strconv.Atoi(flag.Arg(0))
+	if err != nil {
+		panic("server index must be an integer")
 	}
 
 	// crypto setup for testing
@@ -497,7 +511,7 @@ func main() {
 
 	// everyone generates same context for testing
 	contextRandom := abstract.HashStream(suite, []byte("test"), nil)
-	context := NewContext(suite, contextRandom, *id, 3, 3)
+	context := NewContext(suite, contextRandom, id, *n, *k)
 	context.Random = random
 
 	startServer(context)
