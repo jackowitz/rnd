@@ -22,7 +22,7 @@ import (
 )
 
 const testing = false
-const debug = true
+const debug = false
 
 type Server struct {
 	Id int
@@ -135,7 +135,30 @@ type msgStatus struct {
 	Status Status
 }
 
-func (session *Session) GenerateRandom() abstract.Secret {
+type debugGenerate struct {
+	PickSplitCommit time.Duration
+	SendCommits, RecvCommits time.Duration
+	SendStatus, RecvStatus time.Duration
+	SendShares, RecvShares time.Duration
+	Combine time.Duration
+}
+
+func (d debugGenerate) String() string {
+	format := "\tPickSplitCommit: %s\n" +
+		"\tSendCommits: %s\n" +
+		"\tRecvCommits: %s\n" +
+		"\tSendStatus: %s\n" +
+		"\tRecvStatus: %s\n" +
+		"\tSendShares: %s\n" +
+		"\tRecvShares: %s\n" +
+		"\tCombine: %s"
+	return fmt.Sprintf(format, d.PickSplitCommit,
+		d.SendCommits, d.RecvCommits, d.SendStatus,
+		d.RecvStatus, d.SendShares, d.RecvShares, d.Combine)
+}
+
+func (session *Session) GenerateRandom() (abstract.Secret, debugGenerate) {
+	debugStats := debugGenerate{}
 
 	context := session.Context
 	conns := session.Conns
@@ -145,12 +168,15 @@ func (session *Session) GenerateRandom() abstract.Secret {
 
 	// pick our secret r_i value randomly and split it into
 	// n shares, k of which are needed to recover r_i
+	start := time.Now()
 	ri := suite.Secret().Pick(random)
 	ai := new(poly.PriPoly).Pick(suite, context.K, ri, random)
 	si := new(poly.PriShares).Split(ai, context.N)
 	pi := new(poly.PubPoly).Commit(ai, nil)
+	debugStats.PickSplitCommit = time.Since(start)
 
 	// send share and commitment to each peer
+	start = time.Now()
 	for i := range conns {
 		if i == context.Mine {
 			continue
@@ -161,8 +187,10 @@ func (session *Session) GenerateRandom() abstract.Secret {
 			panic("sending share: " + err.Error())
 		}
 	}
+	debugStats.SendCommits = time.Since(start)
 
 	// initialize the shares
+	start = time.Now()
 	shares := make([]*poly.PriShares, context.N)
 	for i := range shares {
 		shares[i] = new(poly.PriShares)
@@ -203,8 +231,10 @@ func (session *Session) GenerateRandom() abstract.Secret {
 		messages[i] = message
 		shares[i].SetShare(context.Mine, share.Share)
 	}
+	debugStats.RecvCommits = time.Since(start)
 
 	// XXX just hardcode success for now
+	start = time.Now()
 	status := msgStatus { SUCCESS }
 	for i := range conns {
 		if i == context.Mine {
@@ -214,8 +244,10 @@ func (session *Session) GenerateRandom() abstract.Secret {
 			panic("send status: " + err.Error())
 		}
 	}
+	debugStats.SendStatus = time.Since(start)
 
 	// make sure everybody reports SUCCESS
+	start = time.Now()
 	for i := range conns {
 		if i == context.Mine {
 			continue
@@ -228,8 +260,10 @@ func (session *Session) GenerateRandom() abstract.Secret {
 			// XXX clean up (preferably using defer)
 		}
 	}
+	debugStats.RecvStatus = time.Since(start)
 
 	// got SUCCESS from everybody, so release our shares
+	start = time.Now()
 	for i := range conns {
 		if i == context.Mine {
 			continue
@@ -238,9 +272,11 @@ func (session *Session) GenerateRandom() abstract.Secret {
 			send(conns[i], &messages[j])
 		}
 	}
+	debugStats.SendShares = time.Since(start)
 
 	// listen for incoming shares from everybody
 	// XXX there's some code duplication here but it's not exact
+	start = time.Now()
 	for i := range conns {
 		if i == context.Mine {
 			continue
@@ -268,8 +304,10 @@ func (session *Session) GenerateRandom() abstract.Secret {
 			shares[j].SetShare(i, share.Share)
 		}
 	}
+	debugStats.RecvShares = time.Since(start)
 
 	// XOR all the individual secrets together
+	start = time.Now()
 	result := make([]byte, suite.SecretLen())
 	for i := range shares {
 		recovered := shares[i].Secret()
@@ -278,6 +316,7 @@ func (session *Session) GenerateRandom() abstract.Secret {
 			result[i] ^= bytes[i]
 		}
 	}
+	debugStats.Combine = time.Since(start)
 
 	// XXX: this approach is group-dependent, maybe
 	// just want to return a []byte
@@ -285,7 +324,7 @@ func (session *Session) GenerateRandom() abstract.Secret {
 	if err := value.Decode(result); err != nil {
 		panic("final decode: " + err.Error())
 	}
-	return value
+	return value, debugStats
 }
 
 type Session struct {
@@ -311,7 +350,7 @@ const timeout = 3*time.Second
 func (session *Session) Start(connChan <-chan Connection,
 		replyConn net.Conn, close chan<- Nonce) {
 
-	connectStart := time.Now()
+	start := time.Now()
 	context := session.Context
 	for i := context.Mine + 1; i < context.N; i++ {
 		server := context.Servers[i]
@@ -333,18 +372,24 @@ func (session *Session) Start(connChan <-chan Connection,
 		connection := <- connChan
 		session.Conns[connection.Message.Id] = connection.Conn
 	}
-	connect := time.Since(connectStart)
+	connect := time.Since(start)
+	if debug {
+		fmt.Printf("[%d, %d] Setup: %s\n", context.N, context.K, connect)
+	}
 
 	// no more connections for this session, notify
 	// the main loop to clean up the map
 	close <- session.Nonce
 
 	// everyone's all wired up, so start the protocol
-	generate := 0 * time.Millisecond
 	for i := 0; i < session.Values; i++ {
-		generateStart := time.Now()
-		value := session.GenerateRandom()
-		generate += time.Since(generateStart)
+		start = time.Now()
+		value, debugStats := session.GenerateRandom()
+		generate := time.Since(start)
+		if debug && i == 0 {
+			format := "[%d, %d] Generate: %s {\n%s\n}\n"
+			fmt.Printf(format, context.N, context.K, generate, debugStats)
+		}
 		if replyConn != nil {
 			if _, err := replyConn.Write(value.Encode()); err != nil {
 				panic("reply send: " + err.Error())
@@ -355,11 +400,6 @@ func (session *Session) Start(connChan <-chan Connection,
 		if err := replyConn.Close(); err != nil {
 			panic("reply close: " + err.Error())
 		}
-	}
-	if debug {
-		format := "[%d, %d] Setup: %s, Generate: %d values, %s/value\n"
-		fmt.Printf(format, context.N, context.K, connect,
-				session.Values, generate)
 	}
 }
 
