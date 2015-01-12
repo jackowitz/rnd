@@ -1,17 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"crypto/cipher"
 	"encoding/binary"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"reflect"
 	"strconv"
-	"strings"
 	"time"
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/anon"
@@ -22,7 +19,7 @@ import (
 )
 
 const testing = false
-const debug = false
+const debug = true
 
 type Server struct {
 	Id int
@@ -330,13 +327,11 @@ func (session *Session) GenerateRandom() (abstract.Secret, debugGenerate) {
 type Session struct {
 	Context *Context
 	Nonce Nonce
-	Values int
 	Conns []net.Conn
 }
 
 type msgSession struct {
 	Nonce Nonce
-	Values int
 	Id int
 }
 
@@ -359,7 +354,7 @@ func (session *Session) Start(connChan <-chan Connection,
 			format := "Unable to connect to server at %s"
 			panic(fmt.Sprintf(format, server.Address))
 		}
-		data := msgSession{ session.Nonce, session.Values, context.Mine }
+		data := msgSession{ session.Nonce, context.Mine }
 		message := context.Sign(&data)
 		if err := send(conn, &message); err != nil {
 			panic("announcement: " + err.Error())
@@ -382,20 +377,20 @@ func (session *Session) Start(connChan <-chan Connection,
 	close <- session.Nonce
 
 	// everyone's all wired up, so start the protocol
-	for i := 0; i < session.Values; i++ {
-		start = time.Now()
-		value, debugStats := session.GenerateRandom()
-		generate := time.Since(start)
-		if debug && i == 0 {
-			format := "[%d, %d] Generate: %s {\n%s\n}\n"
-			fmt.Printf(format, context.N, context.K, generate, debugStats)
-		}
-		if replyConn != nil {
-			if _, err := replyConn.Write(value.Encode()); err != nil {
-				panic("reply send: " + err.Error())
-			}
+	start = time.Now()
+	value, debugStats := session.GenerateRandom()
+	generate := time.Since(start)
+	if debug {
+		format := "[%d, %d] Generate: %s {\n%s\n}\n"
+		fmt.Printf(format, context.N, context.K, generate, debugStats)
+		fmt.Printf("Value: %s\n", value.String())
+	}
+	if replyConn != nil {
+		if _, err := replyConn.Write(value.Encode()); err != nil {
+			panic("reply send: " + err.Error())
 		}
 	}
+
 	if replyConn != nil {
 		if err := replyConn.Close(); err != nil {
 			panic("reply close: " + err.Error())
@@ -404,15 +399,15 @@ func (session *Session) Start(connChan <-chan Connection,
 }
 
 // Starts a new session in the given context. The session is identified
-// by the provided nonce and produces <values> random values.
+// by the provided nonce and produces a single random value.
 // Returns immediately with a channel on which subsequent connections
 // to the session are delivered but spawns a new goroutine to run
 // the actual session.
-func (context *Context) NewSession(nonce Nonce, values int, replyConn net.Conn,
+func (context *Context) NewSession(nonce Nonce, replyConn net.Conn,
 		closeChan chan<- Nonce) chan <-Connection {
 
 	conns := make([]net.Conn, len(context.Servers))
-	session := &Session{ context, nonce, values, conns }
+	session := &Session{ context, nonce, conns }
 
 	connChan := make(chan Connection)
 	go session.Start(connChan, replyConn, closeChan)
@@ -434,29 +429,6 @@ func listen(address string, connChan chan<- net.Conn) error {
 		}
 	}(listen, connChan)
 	return nil
-}
-
-// Request format: GENERATE <COUNT> RND/1.0\r\n
-// XXX can definitely do this more elegantly
-func parseRequest(conn net.Conn) (int, error) {
-	reader := bufio.NewReader(conn)
-	if buf, err := reader.ReadSlice(' '); err != nil {
-		return -1, err
-	} else {
-		if strings.Trim(string(buf), " ") != "GENERATE" {
-			return -1, errors.New("Invalid Request Method")
-		}
-	}
-	buf, err := reader.ReadSlice(' ')
-	if err != nil {
-		return -1, err
-	}
-	values, err := strconv.Atoi(strings.Trim(string(buf), " "))
-	if err != nil {
-		return -1, err
-	}
-	// XXX protocol and version
-	return values, nil
 }
 
 func startServer(context *Context) {
@@ -506,17 +478,13 @@ func startServer(context *Context) {
 			}
 			connChan, ok := sessions[nonce.String()]
 			if !ok {
-				connChan = context.NewSession(nonce, data.Values, nil, closeChan)
+				connChan = context.NewSession(nonce, nil, closeChan)
 				sessions[nonce.String()] = connChan
 			}
 			connChan <- Connection{ data, conn }
 		case conn := <-externalConnChan:
 			nonce := context.NextNonce()
-			values, err := parseRequest(conn)
-			if err != nil {
-				panic("request: " + err.Error())
-			}
-			connChan := context.NewSession(nonce, values, conn, closeChan)
+			connChan := context.NewSession(nonce, conn, closeChan)
 			sessions[nonce.String()] = connChan
 		case nonce := <-closeChan:
 			connChan, ok := sessions[nonce.String()]
