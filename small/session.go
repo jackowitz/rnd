@@ -29,14 +29,15 @@ type Session struct {
 // Returns immediately with a channel on which subsequent connections
 // to the session are delivered but spawns a new goroutine to run
 // the actual session.
-func NewSession(context *Context, nonce Nonce, requester net.Conn,
+func NewSession(context *Context, nonce Nonce, replyConn net.Conn,
 		done chan<- Nonce) chan <-Connection {
 
 	conns := make([]net.Conn, context.N)
 
-	session := &Session{ context, nonce, conns, context.Suite.Secret(),
-		new(poly.PriPoly), new(poly.PriShares), new(poly.PubPoly),
-		make([]*poly.PriShares, context.N), make([]*poly.PubPoly, context.N)}
+	session := &Session{ context, nonce, conns,
+		context.Suite.Secret(), new(poly.PriPoly), new(poly.PriShares),
+		new(poly.PubPoly), make([]*poly.PriShares, context.N),
+		make([]*poly.PubPoly, context.N)}
 
 	for i := range session.shares {
 		session.shares[i] = new(poly.PriShares)
@@ -44,9 +45,13 @@ func NewSession(context *Context, nonce Nonce, requester net.Conn,
 	}
 
 	incoming := make(chan Connection)
-	go session.Start(incoming, requester, done)
+	go session.Start(incoming, replyConn, done)
 
 	return incoming
+}
+
+func (s *Session) IsMine(i int) bool {
+	return i == s.Mine
 }
 
 // Generates all of the values that we need to contribute to the
@@ -62,23 +67,29 @@ func (s *Session) GenerateInitialShares() {
 	s.commitments[s.Mine] = s.p_i
 }
 
-func (s *Session) IsMine(i int) bool {
-	return i == s.Mine
+type MessageType int
+const (
+	MSG_ANNOUNCE MessageType = iota
+	MSG_SHARE_COMMIT
+	MSG_STATUS
+	MSG_SHARE
+)
+
+type Message struct {
+	Data []byte
+	Signature []byte
 }
 
-func (s *Session) NewShareCommitMessage(i int) *ShareCommitMessage {
-	return &ShareCommitMessage{ s.Nonce, i, s.Mine, s.s_i.Share(i), s.p_i }
-}
-
-// Sends out all of the ShareCommitMessages. If we get an error on
-// any of them we break, as that's bad.
-func (s *Session) SendShareCommitMessages() error {
+// Higher order function to handle broadcasting a type of message
+// to all peers. Take a contructor to make the messages based on
+// the id of the peer.
+func (s *Session) Broadcast(constructor func(int)interface{}) error {
 	for i, conn := range s.Conns {
 		if s.IsMine(i) {
 			continue
 		}
-		share := s.NewShareCommitMessage(i)
-		message := s.Sign(share)
+		data := constructor(i)
+		message := s.Sign(data)
 		if err := send(conn, &message); err != nil {
 			return err
 		}
@@ -86,22 +97,17 @@ func (s *Session) SendShareCommitMessages() error {
 	return nil
 }
 
-func (s *Session) EmptyShareCommitMessage() *ShareCommitMessage {
-	commitment := new(poly.PubPoly)
-	commitment.Init(s.Suite, s.K, nil)
-	return &ShareCommitMessage{ s.Suite.Secret(), 0, 0,
-			s.Suite.Secret(), commitment }
-}
-
 func (s *Session) ReadOne(conn net.Conn, constructor func()interface{},
-		results chan<- interface{}) {
+		verify bool, results chan<- interface{}) {
 
+	// XXX should probably pull this out
 	cons := protobuf.Constructors{
 		tSecret: func()interface{} { return s.Suite.Secret() },
 		tNonce: func()interface{} { return s.Suite.Secret() },
 	}
 
-	conn.SetReadDeadline(time.Now().Add(2*time.Second))
+	timeout := 2 * time.Second
+	conn.SetReadDeadline(time.Now().Add(timeout))
 
 	wrapper := Message{}
 	if err := receive(conn, &wrapper); err != nil {
@@ -111,20 +117,36 @@ func (s *Session) ReadOne(conn net.Conn, constructor func()interface{},
 	if err := protobuf.Decode(wrapper.Data, message, cons); err != nil {
 		results <- nil
 	}
-	// XXX verify commitment
 	results <- message
 }
 
-// Helper function for reading the same type of message from all
+// Higher order function for reading the same type of message from all
 // of our peers. Spawns a goroutine for each peer and delivers
 // the results on the returned channel.
-func (s *Session) ReadAll(cons func()interface{}) <-chan interface{} {
+func (s *Session) ReadAll(cons func()interface{},
+		verify bool) <-chan interface{} {
+
 	results := make(chan interface{}, s.N)
 	for i, conn := range s.Conns {
 		if s.IsMine(i) { continue }
-		go s.ReadOne(conn, cons, results)
+		go s.ReadOne(conn, cons, verify, results)
 	}
 	return results
+}
+
+type ShareCommitMessage struct {
+	Nonce Nonce
+
+	Index, Source int
+	Share abstract.Secret
+	Commitment interface{} // poly.PubPoly
+}
+
+func (s *Session) SendShareCommitMessages() error {
+	return s.Broadcast(func (i int) interface{} {
+		return &ShareCommitMessage{ s.Nonce, i, s.Mine,
+				s.s_i.Share(i), s.p_i }
+	})
 }
 
 // Tries to receive a ShareCommitMessage from all N peers. If we
@@ -133,8 +155,13 @@ func (s *Session) ReadAll(cons func()interface{}) <-chan interface{} {
 func (s *Session) ReceiveShareCommitMessages() error {
 
 	results := s.ReadAll(func() interface{} {
-		return s.EmptyShareCommitMessage()
-	})
+		commitment := new(poly.PubPoly)
+		commitment.Init(s.Suite, s.K, nil)
+
+		message := new(ShareCommitMessage)
+		message.Commitment = commitment
+		return message
+	}, true)
 
 	for pending := s.N-1; pending > 0; pending-- {
 		message := <- results
@@ -149,24 +176,30 @@ func (s *Session) ReceiveShareCommitMessages() error {
 	return nil
 }
 
+type Status int
+const (
+	SUCCESS Status = iota
+	FAILURE
+)
+
+type StatusMessage struct {
+	Nonce Nonce
+
+	Source int
+	Status Status
+}
+
 func (s *Session) SendStatusMessages(status Status) error {
-	data := StatusMessage{ s.Nonce, s.Mine, status }
-	message := s.Sign(&data)
-	for i, conn := range s.Conns {
-		if s.IsMine(i) {
-			continue
-		}
-		if err := send(conn, &message); err != nil {
-			return err
-		}
-	}
-	return nil
+	message := &StatusMessage{ s.Nonce, s.Mine, status }
+	return s.Broadcast(func (i int) interface{} {
+		return message
+	})
 }
 
 func (s *Session) ReceiveStatusMessages() error {
 	results := s.ReadAll(func() interface{} {
 		return &StatusMessage{ s.Suite.Secret(), 0, FAILURE }
-	})
+	}, true)
 
 	for pending := s.N-1; pending > 0; pending-- {
 		message := <- results
@@ -181,32 +214,28 @@ func (s *Session) ReceiveStatusMessages() error {
 	return nil
 }
 
-func (s *Session) NewShareMessage() *ShareMessage {
+type ShareMessage struct {
+	Nonce Nonce
+
+	Source int
+	Shares []abstract.Secret
+}
+
+func (s *Session) SendShareMessages() error {
 	shares := make([]abstract.Secret, s.N)
 	for i, share := range s.shares {
 		shares[i] = share.Share(s.Mine)
 	}
-	return &ShareMessage{ s.Nonce, s.Mine, shares }
-}
-
-func (s *Session) SendShareMessages() error {
-	data := s.NewShareMessage()
-	message := s.Sign(data)
-	for i, conn := range s.Conns {
-		if s.IsMine(i) {
-			continue
-		}
-		if err := send(conn, &message); err != nil {
-			return err
-		}
-	}
-	return nil
+	message := &ShareMessage{ s.Nonce, s.Mine, shares }
+	return s.Broadcast(func (i int) interface{} {
+		return message
+	})
 }
 
 func (s *Session) ReceiveShareMessages() error {
 	results := s.ReadAll(func() interface{} {
-		return &ShareMessage{}
-	})
+		return new(ShareMessage)
+	}, true)
 
 	for pending := s.N-1; pending > 0; pending-- {
 		message := <- results

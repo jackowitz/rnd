@@ -8,7 +8,7 @@ function start_rnd {
   fi
   n=$1
   k=$2
-  go build -o $BINARY rnd/small
+  go build -o $BINARY rnd_tcp/small
   for i in `seq 0 $(($n - 1))`; do
     if [[ $i -eq 0 ]]; then
       ./$BINARY -n=$n -k=$n $i &

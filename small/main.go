@@ -11,7 +11,6 @@ import (
 	"time"
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/nist"
-	//"github.com/dedis/crypto/poly"
 	"github.com/dedis/crypto/protobuf"
 	"github.com/dedis/crypto/random"
 	"rnd_tcp/stopwatch"
@@ -31,18 +30,6 @@ var tPoint = reflect.TypeOf(&aPoint).Elem()
 var aNonce Nonce
 var tNonce = reflect.TypeOf(&aNonce).Elem()
 
-type MessageType int
-const (
-	MSG_ANNOUNCE MessageType = iota
-	MSG_SHARE_COMMIT
-	MSG_STATUS
-	MSG_SHARE
-)
-
-type Message struct {
-	Data []byte
-	Signature []byte
-}
 
 func send(w io.Writer, message interface{}) error {
 	data := protobuf.Encode(message)
@@ -67,33 +54,6 @@ func receive(r io.Reader, structPtr interface{}) error {
 	return protobuf.Decode(buf, structPtr, nil)
 }
 
-type ShareCommitMessage struct {
-	Nonce Nonce
-
-	Index, Source int
-	Share abstract.Secret
-	Commitment interface{} // poly.PubPoly
-}
-
-type ShareMessage struct {
-	Nonce Nonce
-
-	Source int
-	Shares []abstract.Secret
-}
-
-type Status int
-const (
-	SUCCESS Status = iota
-	FAILURE
-)
-
-type StatusMessage struct {
-	Nonce Nonce
-
-	Source int
-	Status Status
-}
 
 func (s *Session) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
 
