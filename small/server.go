@@ -26,8 +26,12 @@ func NewServer(c *Context) *Server {
 
 func (s *Server) HandleConnection(conn net.Conn) error {
 	// Parse the connection message.
+	raw, err := ReadPrefix(conn);
+	if err != nil {
+		return err
+	}
 	message := Message{}
-	if err := receive(conn, &message); err != nil {
+	if err := protobuf.Decode(raw, &message, nil); err != nil {
 		return err
 	}
 
@@ -41,7 +45,7 @@ func (s *Server) HandleConnection(conn net.Conn) error {
 	// Check the the message is properly signed by who it's
 	// claiming to be from.
 	nonce := data.Nonce
-	if err := s.Verify(message, data.Id); err != nil {
+	if err := s.Verify(&message); err != nil {
 		return err
 	}
 

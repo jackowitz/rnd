@@ -76,6 +76,7 @@ const (
 )
 
 type Message struct {
+	Source int
 	Data []byte
 	Signature []byte
 }
@@ -84,13 +85,16 @@ type Message struct {
 // to all peers. Take a contructor to make the messages based on
 // the id of the peer.
 func (s *Session) Broadcast(constructor func(int)interface{}) error {
+
 	for i, conn := range s.Conns {
 		if s.IsMine(i) {
 			continue
 		}
 		data := constructor(i)
-		message := s.Sign(data)
-		if err := send(conn, &message); err != nil {
+		message := &Message{ s.Mine, protobuf.Encode(data), nil }
+		s.Sign(message)
+		raw := protobuf.Encode(message)
+		if _, err := WritePrefix(conn, raw); err != nil {
 			return err
 		}
 	}
@@ -109,12 +113,22 @@ func (s *Session) ReadOne(conn net.Conn, constructor func()interface{},
 	timeout := 2 * time.Second
 	conn.SetReadDeadline(time.Now().Add(timeout))
 
-	wrapper := Message{}
-	if err := receive(conn, &wrapper); err != nil {
+	raw, err := ReadPrefix(conn)
+	if err != nil {
 		results <- nil
 	}
+	wrapper := new(Message)
+	err = protobuf.Decode(raw, wrapper, nil)
+	if err != nil {
+		results <- nil
+	}
+	if err := s.Verify(wrapper); err != nil {
+		results <- nil
+	}
+	data := wrapper.Data
 	message := constructor()
-	if err := protobuf.Decode(wrapper.Data, message, cons); err != nil {
+	err = protobuf.Decode(data, message, cons)
+	if err != nil {
 		results <- nil
 	}
 	results <- message
@@ -168,6 +182,10 @@ func (s *Session) ReceiveShareCommitMessages() error {
 		sc, ok := message.(*ShareCommitMessage)
 		if sc == nil || !ok {
 			return errors.New("ERECV")
+		}
+		commitment := sc.Commitment.(*poly.PubPoly)
+		if !commitment.Check(sc.Index, sc.Share) {
+			return errors.New("ECHECK")
 		}
 		source := sc.Source
 		s.shares[source].SetShare(sc.Index, sc.Share)
@@ -245,6 +263,9 @@ func (s *Session) ReceiveShareMessages() error {
 		}
 		source := shares.Source
 		for i, share := range shares.Shares {
+			if !s.commitments[i].Check(source, share) {
+				return errors.New("ECHECK")
+			}
 			s.shares[i].SetShare(source, share)
 		}
 	}

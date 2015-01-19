@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/anon"
-	"github.com/dedis/crypto/protobuf"
 )
 
 type Peer struct {
@@ -58,19 +57,15 @@ func (c *Context) NextNonce() Nonce {
 	return c.Suite.Secret().Pick(c.Random)
 }
 
-func (c *Context) Sign(structPtr interface{}) Message {
+func (c *Context) Sign(m *Message) {
 	self := c.Self()
-	data := protobuf.Encode(structPtr)
-
-	signature := anon.Sign(c.Suite, c.Random, data,
+	signature := anon.Sign(c.Suite, c.Random, m.Data,
 			anon.Set{self.PubKey}, nil, 0, self.PrivKey)
-	return Message{data, signature}
+	m.Signature = signature
 }
 
-func (c *Context) Verify(message Message, server int) error {
-	key := anon.Set{c.Peers[server].PubKey}
-
-	_, err := anon.Verify(c.Suite, message.Data, key,
-			nil, message.Signature)
+func (c *Context) Verify(m *Message) error {
+	key := anon.Set{c.Peers[m.Source].PubKey}
+	_, err := anon.Verify(c.Suite, m.Data, key, nil, m.Signature)
 	return err
 }

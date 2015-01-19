@@ -31,29 +31,27 @@ var aNonce Nonce
 var tNonce = reflect.TypeOf(&aNonce).Elem()
 
 
-func send(w io.Writer, message interface{}) error {
-	data := protobuf.Encode(message)
-	length := len(data)
-	buf := make([]byte, length+2)
+func WritePrefix(w io.Writer, p []byte) (n int, err error) {
+	length := len(p)
+	buf := make([]byte, 2)
+	buf = append(buf, p...)
 	binary.LittleEndian.PutUint16(buf[:2], uint16(length))
-	copy(buf[2:], data)
-	_, err := w.Write(buf)
-	return err
+	return w.Write(buf)
 }
 
-func receive(r io.Reader, structPtr interface{}) error {
+func ReadPrefix(r io.Reader) ([]byte, error) {
 	lenbuf := make([]byte, 2)
 	if _, err := io.ReadFull(r, lenbuf); err != nil {
-		return err
+		return nil, err
 	}
 	length := binary.LittleEndian.Uint16(lenbuf)
 	buf := make([]byte, length)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return err
+	n, err := io.ReadFull(r, buf)
+	if err != nil {
+		return nil, err
 	}
-	return protobuf.Decode(buf, structPtr, nil)
+	return buf[:n], nil
 }
-
 
 func (s *Session) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
 
@@ -136,9 +134,11 @@ func (s *Session) Start(connChan <-chan Connection,
 			format := "Unable to connect to server at %s"
 			panic(fmt.Sprintf(format, s.Peers[i].Addr))
 		}
-		data := AnnouncementMessage{ s.Nonce, s.Mine }
-		message := s.Sign(&data)
-		if err := send(conn, &message); err != nil {
+		data := &AnnouncementMessage{ s.Nonce, s.Mine }
+		message := &Message{ s.Mine, protobuf.Encode(data), nil }
+		s.Sign(message)
+		raw := protobuf.Encode(message)
+		if _, err := WritePrefix(conn, raw); err != nil {
 			panic("announcement: " + err.Error())
 		}
 		s.Conns[i] = conn
