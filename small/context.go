@@ -2,7 +2,9 @@ package main
 
 import (
 	"crypto/cipher"
+	"encoding/json"
 	"fmt"
+	"os"
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/anon"
 )
@@ -22,6 +24,24 @@ type PeerConfig struct {
 
 func (p *PeerConfig) Self() *Peer {
 	return &p.Peers[p.Mine]
+}
+
+func (p *PeerConfig) Save(path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(file)
+	return encoder.Encode(p)
+}
+
+func (p *PeerConfig) FromFile(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(file)
+	return decoder.Decode(p)
 }
 
 // Generate a new configuration for running locally.
@@ -57,6 +77,7 @@ func (c *Context) NextNonce() Nonce {
 	return c.Suite.Secret().Pick(c.Random)
 }
 
+// Sign the message in the current context.
 func (c *Context) Sign(m *Message) {
 	self := c.Self()
 	signature := anon.Sign(c.Suite, c.Random, m.Data,
@@ -64,6 +85,8 @@ func (c *Context) Sign(m *Message) {
 	m.Signature = signature
 }
 
+// Verify the message against the source specified in the
+// message itself.
 func (c *Context) Verify(m *Message) error {
 	key := anon.Set{c.Peers[m.Source].PubKey}
 	_, err := anon.Verify(c.Suite, m.Data, key, nil, m.Signature)

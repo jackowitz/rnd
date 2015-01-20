@@ -9,12 +9,22 @@ type Server struct {
 	*Context
 
 	// Session management stuff.
-	Sessions map[string] chan <-Connection
-	Done chan Nonce
+	sessions map[string] chan <-Connection
+	done chan Nonce
 }
 
 func (s *Server) AcceptsRequests() bool {
 	return s.Mine == 0
+}
+
+type AnnouncementMessage struct {
+	Nonce Nonce
+	Id int
+}
+
+type Connection struct {
+	Message AnnouncementMessage
+	Conn net.Conn
 }
 
 func NewServer(c *Context) *Server {
@@ -51,10 +61,10 @@ func (s *Server) HandleConnection(conn net.Conn) error {
 
 	// See if there's already a session for that Nonce and,
 	// if not, start up a new one.
-	forward, ok := s.Sessions[nonce.String()]
+	forward, ok := s.sessions[nonce.String()]
 	if !ok {
-		forward = NewSession(s.Context, nonce, nil, s.Done)
-		s.Sessions[nonce.String()] = forward
+		forward = NewSession(s.Context, nonce, nil, s.done)
+		s.sessions[nonce.String()] = forward
 	}
 
 	// Finally, forward the connection to the proper Session.
@@ -86,13 +96,13 @@ func (s *Server) Start() {
 			}
 		case conn := <-requests:
 			nonce := s.NextNonce()
-			forward := NewSession(s.Context, nonce, conn, s.Done)
-			s.Sessions[nonce.String()] = forward
-		case nonce := <-s.Done:
-			forward, ok := s.Sessions[nonce.String()]
+			forward := NewSession(s.Context, nonce, conn, s.done)
+			s.sessions[nonce.String()] = forward
+		case nonce := <-s.done:
+			forward, ok := s.sessions[nonce.String()]
 			if ok {
 				close(forward)
-				delete(s.Sessions, nonce.String())
+				delete(s.sessions, nonce.String())
 			}
 		}
 	}
