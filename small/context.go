@@ -22,6 +22,10 @@ type PeerConfig struct {
 	Mine, N, K int
 }
 
+func (p *PeerConfig) IsMine(i int) bool {
+	return i == p.Mine
+}
+
 func (p *PeerConfig) Self() *Peer {
 	return &p.Peers[p.Mine]
 }
