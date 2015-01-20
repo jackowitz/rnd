@@ -67,8 +67,9 @@ func main() {
 	contextRandom := abstract.HashStream(suite, []byte("test"), nil)
 	config := NewLocalPeerConfig(suite, contextRandom, id, *n, *k)
 
+	// Determine the context and protocol at runtime.
 	context := NewContext(suite, random, config)
-	protocol := new(SmallProtocol)
+	protocol := new(ScalableProtocol)
 
 	NewServer(context, protocol).Start()
 }

@@ -20,10 +20,34 @@ type ScalableLeaderSession struct {
 	V_C_p [][]byte
 }
 
+func NewScalableLeaderSession(context *Context, nonce Nonce,
+		replyConn net.Conn, done chan<- Nonce) chan <-Connection {
+
+	broadcaster := &Broadcaster{
+		context,
+		make([]net.Conn, context.N),
+	}
+
+	scalable := &ScalableLeaderSession{
+		context,
+		broadcaster,
+		nonce,
+		context.Suite.Secret(),
+		context.Suite.Point(),
+		nil,
+		nil,
+	}
+
+	incoming := make(chan Connection)
+	go scalable.Start(incoming, replyConn, done)
+
+	return incoming
+}
+
 func (s *ScalableLeaderSession) Start(connChan <-chan Connection,
 		replyConn net.Conn, close chan<- Nonce) {
 
-	// Leader connects to everybody else and announced himself and Nonce
+	// Leader connects to everybody else.
 	for i := 0; i < s.N; i++ {
 		if s.IsMine(i) {
 			continue
@@ -42,7 +66,7 @@ func (s *ScalableLeaderSession) Start(connChan <-chan Connection,
 		}
 		s.Conns[i] = conn
 	}
-	fmt.Println("Started Leader" + s.Nonce.String())
+	fmt.Println("Started Leader " + s.Nonce.String())
 	s.RunLottery()
 }
 

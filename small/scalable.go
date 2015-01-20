@@ -18,9 +18,28 @@ type ScalableSession struct {
 	C_i_p []byte
 }
 
+func NewScalableSession(context *Context, nonce Nonce,
+		replyConn net.Conn, done chan<- Nonce) chan <-Connection {
+
+	scalable := &ScalableSession{
+		context,
+		nonce,
+		nil,
+		context.Suite.Secret(),
+		context.Suite.Point(),
+		nil,
+	}
+
+	incoming := make(chan Connection)
+	go scalable.Start(incoming, replyConn, done)
+
+	return incoming
+}
+
 func (s *ScalableSession) Start(connChan <-chan Connection,
 		replyConn net.Conn, close chan<- Nonce) {
 
+	// Get our connection to the leader.
 	conn := <- connChan
 	s.Conn = conn.Conn
 

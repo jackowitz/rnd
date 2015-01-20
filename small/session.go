@@ -26,6 +26,35 @@ type SmallSession struct {
 	commitments []*poly.PubPoly
 }
 
+func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
+		done chan<- Nonce) chan <-Connection {
+
+	conns := make([]net.Conn, context.N)
+	broadcaster := &Broadcaster{ context, conns }
+
+	session := &SmallSession{
+		context,
+		broadcaster,
+		nonce,
+		context.Suite.Secret(),
+		new(poly.PriPoly),
+		new(poly.PriShares),
+		new(poly.PubPoly),
+		make([]*poly.PriShares, context.N),
+		make([]*poly.PubPoly, context.N),
+	}
+
+	for i := range session.shares {
+		session.shares[i] = new(poly.PriShares)
+		session.shares[i].Empty(session.Suite, session.K, session.N)
+	}
+
+	incoming := make(chan Connection)
+	go session.Start(incoming, replyConn, done)
+
+	return incoming
+}
+
 // Starts a new session in the given context. The session is identified
 // by the provided nonce and produces a single random value.
 // Returns immediately with a channel on which subsequent connections
