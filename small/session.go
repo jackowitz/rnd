@@ -13,9 +13,9 @@ import (
 
 type Session struct {
 	*Context
-	Nonce Nonce
+	*Broadcaster
 
-	Conns []net.Conn
+	Nonce Nonce
 
 	r_i abstract.Secret
 	a_i *poly.PriPoly
@@ -35,8 +35,9 @@ func NewSession(context *Context, nonce Nonce, replyConn net.Conn,
 		done chan<- Nonce) chan <-Connection {
 
 	conns := make([]net.Conn, context.N)
+	broadcaster := &Broadcaster{ context, conns }
 
-	session := &Session{ context, nonce, conns,
+	session := &Session{ context, broadcaster, nonce,
 		context.Suite.Secret(), new(poly.PriPoly), new(poly.PriShares),
 		new(poly.PubPoly), make([]*poly.PriShares, context.N),
 		make([]*poly.PubPoly, context.N)}
@@ -162,10 +163,6 @@ func (s *Session) Start(connChan <-chan Connection,
 	}
 }
 
-func (s *Session) IsMine(i int) bool {
-	return i == s.Mine
-}
-
 // Generates all of the values that we need to contribute to the
 // protocol. Also stows away the shares that we need to "distribute"
 // to ourself.
@@ -193,18 +190,23 @@ type Message struct {
 	Signature []byte
 }
 
+type Broadcaster struct {
+	*Context
+	Conns []net.Conn
+}
+
 // Higher order function to handle broadcasting a type of message
 // to all peers. Take a contructor to make the messages based on
 // the id of the peer.
-func (s *Session) Broadcast(constructor func(int)interface{}) error {
+func (b *Broadcaster) Broadcast(constructor func(int)interface{}) error {
 
-	for i, conn := range s.Conns {
-		if s.IsMine(i) {
+	for i, conn := range b.Conns {
+		if b.IsMine(i) {
 			continue
 		}
 		data := constructor(i)
-		message := &Message{ s.Mine, protobuf.Encode(data), nil }
-		s.Sign(message)
+		message := &Message{ b.Mine, protobuf.Encode(data), nil }
+		b.Sign(message)
 		raw := protobuf.Encode(message)
 		if _, err := WritePrefix(conn, raw); err != nil {
 			return err
@@ -213,13 +215,13 @@ func (s *Session) Broadcast(constructor func(int)interface{}) error {
 	return nil
 }
 
-func (s *Session) ReadOne(conn net.Conn, constructor func()interface{},
+func (b *Broadcaster) ReadOne(conn net.Conn, constructor func()interface{},
 		verify bool, results chan<- interface{}) {
 
 	// XXX should probably pull this out
 	cons := protobuf.Constructors{
-		tSecret: func()interface{} { return s.Suite.Secret() },
-		tNonce: func()interface{} { return s.Suite.Secret() },
+		tSecret: func()interface{} { return b.Suite.Secret() },
+		tNonce: func()interface{} { return b.Suite.Secret() },
 	}
 
 	timeout := 2 * time.Second
@@ -234,7 +236,7 @@ func (s *Session) ReadOne(conn net.Conn, constructor func()interface{},
 	if err != nil {
 		results <- nil
 	}
-	if err := s.Verify(wrapper); err != nil {
+	if err := b.Verify(wrapper); err != nil {
 		results <- nil
 	}
 	data := wrapper.Data
@@ -249,13 +251,13 @@ func (s *Session) ReadOne(conn net.Conn, constructor func()interface{},
 // Higher order function for reading the same type of message from all
 // of our peers. Spawns a goroutine for each peer and delivers
 // the results on the returned channel.
-func (s *Session) ReadAll(cons func()interface{},
+func (b *Broadcaster) ReadAll(cons func()interface{},
 		verify bool) <-chan interface{} {
 
-	results := make(chan interface{}, s.N)
-	for i, conn := range s.Conns {
-		if s.IsMine(i) { continue }
-		go s.ReadOne(conn, cons, verify, results)
+	results := make(chan interface{}, b.N)
+	for i, conn := range b.Conns {
+		if b.IsMine(i) { continue }
+		go b.ReadOne(conn, cons, verify, results)
 	}
 	return results
 }
