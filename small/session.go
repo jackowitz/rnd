@@ -11,7 +11,7 @@ import (
 	"rnd_tcp/stopwatch"
 )
 
-type Session struct {
+type SmallSession struct {
 	*Context
 	*Broadcaster
 
@@ -31,29 +31,7 @@ type Session struct {
 // Returns immediately with a channel on which subsequent connections
 // to the session are delivered but spawns a new goroutine to run
 // the actual session.
-func NewSession(context *Context, nonce Nonce, replyConn net.Conn,
-		done chan<- Nonce) chan <-Connection {
-
-	conns := make([]net.Conn, context.N)
-	broadcaster := &Broadcaster{ context, conns }
-
-	session := &Session{ context, broadcaster, nonce,
-		context.Suite.Secret(), new(poly.PriPoly), new(poly.PriShares),
-		new(poly.PubPoly), make([]*poly.PriShares, context.N),
-		make([]*poly.PubPoly, context.N)}
-
-	for i := range session.shares {
-		session.shares[i] = new(poly.PriShares)
-		session.shares[i].Empty(session.Suite, session.K, session.N)
-	}
-
-	incoming := make(chan Connection)
-	go session.Start(incoming, replyConn, done)
-
-	return incoming
-}
-
-func (s *Session) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
+func (s *SmallSession) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
 
 	// Record performance/debug timings.
 	stopwatch := stopwatch.NewStopwatch()
@@ -114,7 +92,7 @@ func (s *Session) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
 
 const timeout = 3*time.Second
 
-func (s *Session) Start(connChan <-chan Connection,
+func (s *SmallSession) Start(connChan <-chan Connection,
 		replyConn net.Conn, close chan<- Nonce) {
 
 	for i := s.Mine + 1; i < s.N; i++ {
@@ -166,7 +144,7 @@ func (s *Session) Start(connChan <-chan Connection,
 // Generates all of the values that we need to contribute to the
 // protocol. Also stows away the shares that we need to "distribute"
 // to ourself.
-func (s *Session) GenerateInitialShares() {
+func (s *SmallSession) GenerateInitialShares() {
 	s.r_i.Pick(s.Random)
 	s.a_i.Pick(s.Suite, s.K, s.r_i, s.Random)
 	s.s_i.Split(s.a_i, s.N)
@@ -190,78 +168,6 @@ type Message struct {
 	Signature []byte
 }
 
-type Broadcaster struct {
-	*Context
-	Conns []net.Conn
-}
-
-// Higher order function to handle broadcasting a type of message
-// to all peers. Take a contructor to make the messages based on
-// the id of the peer.
-func (b *Broadcaster) Broadcast(constructor func(int)interface{}) error {
-
-	for i, conn := range b.Conns {
-		if b.IsMine(i) {
-			continue
-		}
-		data := constructor(i)
-		message := &Message{ b.Mine, protobuf.Encode(data), nil }
-		b.Sign(message)
-		raw := protobuf.Encode(message)
-		if _, err := WritePrefix(conn, raw); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (b *Broadcaster) ReadOne(conn net.Conn, constructor func()interface{},
-		verify bool, results chan<- interface{}) {
-
-	// XXX should probably pull this out
-	cons := protobuf.Constructors{
-		tSecret: func()interface{} { return b.Suite.Secret() },
-		tNonce: func()interface{} { return b.Suite.Secret() },
-	}
-
-	timeout := 2 * time.Second
-	conn.SetReadDeadline(time.Now().Add(timeout))
-
-	raw, err := ReadPrefix(conn)
-	if err != nil {
-		results <- nil
-	}
-	wrapper := new(Message)
-	err = protobuf.Decode(raw, wrapper, nil)
-	if err != nil {
-		results <- nil
-	}
-	if err := b.Verify(wrapper); err != nil {
-		results <- nil
-	}
-	data := wrapper.Data
-	message := constructor()
-	err = protobuf.Decode(data, message, cons)
-	if err != nil {
-		results <- nil
-	}
-	results <- message
-}
-
-// Higher order function for reading the same type of message from all
-// of our peers. Spawns a goroutine for each peer and delivers
-// the results on the returned channel.
-func (b *Broadcaster) ReadAll(cons func()interface{},
-		verify bool) <-chan interface{} {
-
-	results := make(chan interface{}, b.N)
-	for i, conn := range b.Conns {
-		if b.IsMine(i) { continue }
-		go b.ReadOne(conn, cons, verify, results)
-	}
-	return results
-}
-
 type ShareCommitMessage struct {
 	Nonce Nonce
 
@@ -270,7 +176,7 @@ type ShareCommitMessage struct {
 	Commitment interface{} // poly.PubPoly
 }
 
-func (s *Session) SendShareCommitMessages() error {
+func (s *SmallSession) SendShareCommitMessages() error {
 	return s.Broadcast(func (i int) interface{} {
 		return &ShareCommitMessage{ s.Nonce, i, s.Mine,
 				s.s_i.Share(i), s.p_i }
@@ -280,7 +186,7 @@ func (s *Session) SendShareCommitMessages() error {
 // Tries to receive a ShareCommitMessage from all N peers. If we
 // get fewer than N, we error out, since we want the initial shares
 // from everybody, not just threshold K.
-func (s *Session) ReceiveShareCommitMessages() error {
+func (s *SmallSession) ReceiveShareCommitMessages() error {
 
 	results := s.ReadAll(func() interface{} {
 		commitment := new(poly.PubPoly)
@@ -321,14 +227,14 @@ type StatusMessage struct {
 	Status Status
 }
 
-func (s *Session) SendStatusMessages(status Status) error {
+func (s *SmallSession) SendStatusMessages(status Status) error {
 	message := &StatusMessage{ s.Nonce, s.Mine, status }
 	return s.Broadcast(func (i int) interface{} {
 		return message
 	})
 }
 
-func (s *Session) ReceiveStatusMessages() error {
+func (s *SmallSession) ReceiveStatusMessages() error {
 	results := s.ReadAll(func() interface{} {
 		return &StatusMessage{ s.Suite.Secret(), 0, FAILURE }
 	}, true)
@@ -353,7 +259,7 @@ type ShareMessage struct {
 	Shares []abstract.Secret
 }
 
-func (s *Session) SendShareMessages() error {
+func (s *SmallSession) SendShareMessages() error {
 	shares := make([]abstract.Secret, s.N)
 	for i, share := range s.shares {
 		shares[i] = share.Share(s.Mine)
@@ -364,7 +270,7 @@ func (s *Session) SendShareMessages() error {
 	})
 }
 
-func (s *Session) ReceiveShareMessages() error {
+func (s *SmallSession) ReceiveShareMessages() error {
 	results := s.ReadAll(func() interface{} {
 		return new(ShareMessage)
 	}, true)
@@ -386,7 +292,7 @@ func (s *Session) ReceiveShareMessages() error {
 	return nil
 }
 
-func (s *Session) CombineShares() (abstract.Secret, error) {
+func (s *SmallSession) CombineShares() (abstract.Secret, error) {
 	result := make([]byte, s.Suite.SecretLen())
 	for i := range s.shares {
 		recovered := s.shares[i].Secret()

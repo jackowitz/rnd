@@ -7,6 +7,7 @@ import (
 
 type Server struct {
 	*Context
+	Protocol
 
 	// Session management stuff.
 	sessions map[string] chan <-Connection
@@ -27,11 +28,17 @@ type Connection struct {
 	Conn net.Conn
 }
 
-func NewServer(c *Context) *Server {
+func NewServer(context *Context, protocol Protocol) *Server {
+
 	sessions := make(map[string]chan <-Connection)
 	done := make(chan Nonce)
 
-	return &Server{ c, sessions, done }
+	return &Server{
+		context,
+		protocol,
+		sessions,
+		done,
+	}
 }
 
 func (s *Server) HandleConnection(conn net.Conn) error {
@@ -63,7 +70,7 @@ func (s *Server) HandleConnection(conn net.Conn) error {
 	// if not, start up a new one.
 	forward, ok := s.sessions[nonce.String()]
 	if !ok {
-		forward = NewSession(s.Context, nonce, nil, s.done)
+		forward = s.NewSession(s.Context, nonce, nil, s.done)
 		s.sessions[nonce.String()] = forward
 	}
 
@@ -96,7 +103,7 @@ func (s *Server) Start() {
 			}
 		case conn := <-requests:
 			nonce := s.NextNonce()
-			forward := NewSession(s.Context, nonce, conn, s.done)
+			forward := s.NewLeaderSession(s.Context, nonce, conn, s.done)
 			s.sessions[nonce.String()] = forward
 		case nonce := <-s.done:
 			forward, ok := s.sessions[nonce.String()]

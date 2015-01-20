@@ -13,7 +13,7 @@ function start_rnd {
     if [[ $i -eq 0 ]]; then
       ./$BINARY -n=$n -k=$n $i &
     else
-      ./$BINARY -n=$n -k=$n $i &> /dev/null &
+      ./$BINARY -n=$n -k=$n $i & #> /dev/null &
     fi
   done
   echo "Started $n servers."

@@ -68,5 +68,7 @@ func main() {
 	config := NewLocalPeerConfig(suite, contextRandom, id, *n, *k)
 
 	context := NewContext(suite, random, config)
-	NewServer(context).Start()
+	protocol := new(SmallProtocol)
+
+	NewServer(context, protocol).Start()
 }
