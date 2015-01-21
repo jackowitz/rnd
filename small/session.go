@@ -188,24 +188,21 @@ const (
 	MSG_SHARE
 )
 
-type Message struct {
-	Source int
-	Data []byte
-	Signature []byte
-}
-
 type ShareCommitMessage struct {
 	Nonce Nonce
-
 	Index, Source int
 	Share abstract.Secret
 	Commitment interface{} // poly.PubPoly
+	Signature []byte
 }
 
 func (s *SmallSession) SendShareCommitMessages() error {
 	return s.Broadcast(func (i int) interface{} {
-		return &ShareCommitMessage{ s.Nonce, i, s.Mine,
-				s.s_i.Share(i), s.p_i }
+		message := &ShareCommitMessage{ s.Nonce, i,
+				s.Mine, s.s_i.Share(i), s.p_i, nil }
+		signature := s.Sign(protobuf.Encode(message))
+		message.Signature = signature
+		return message
 	})
 }
 
@@ -221,21 +218,28 @@ func (s *SmallSession) ReceiveShareCommitMessages() error {
 		message := new(ShareCommitMessage)
 		message.Commitment = commitment
 		return message
-	}, true)
+	})
 
 	for pending := s.N-1; pending > 0; pending-- {
-		message := <- results
-		sc, ok := message.(*ShareCommitMessage)
-		if sc == nil || !ok {
+		msgPtr := <- results
+		message, ok := msgPtr.(*ShareCommitMessage)
+		if message == nil || !ok {
 			return errors.New("ERECV")
 		}
-		commitment := sc.Commitment.(*poly.PubPoly)
-		if !commitment.Check(sc.Index, sc.Share) {
+		signature := message.Signature
+		message.Signature = nil
+		data := protobuf.Encode(message)
+		err := s.Verify(data, signature, message.Source)
+		if err != nil {
+			return errors.New("EVERIFY")
+		}
+		commitment := message.Commitment.(*poly.PubPoly)
+		if !commitment.Check(message.Index, message.Share) {
 			return errors.New("ECHECK")
 		}
-		source := sc.Source
-		s.shares[source].SetShare(sc.Index, sc.Share)
-		s.commitments[source] = sc.Commitment.(*poly.PubPoly)
+		source := message.Source
+		s.shares[source].SetShare(message.Index, message.Share)
+		s.commitments[source] = message.Commitment.(*poly.PubPoly)
 	}
 	return nil
 }
@@ -248,13 +252,15 @@ const (
 
 type StatusMessage struct {
 	Nonce Nonce
-
 	Source int
 	Status Status
+	Signature []byte
 }
 
 func (s *SmallSession) SendStatusMessages(status Status) error {
-	message := &StatusMessage{ s.Nonce, s.Mine, status }
+	message := &StatusMessage{ s.Nonce, s.Mine, status, nil }
+	signature := s.Sign(protobuf.Encode(message))
+	message.Signature = signature
 	return s.Broadcast(func (i int) interface{} {
 		return message
 	})
@@ -262,16 +268,23 @@ func (s *SmallSession) SendStatusMessages(status Status) error {
 
 func (s *SmallSession) ReceiveStatusMessages() error {
 	results := s.ReadAll(func() interface{} {
-		return &StatusMessage{ s.Suite.Secret(), 0, FAILURE }
-	}, true)
+		return &StatusMessage{ s.Suite.Secret(), 0, FAILURE, nil }
+	})
 
 	for pending := s.N-1; pending > 0; pending-- {
-		message := <- results
-		status, ok := message.(*StatusMessage)
-		if status == nil || !ok {
+		msgPtr := <- results
+		message, ok := msgPtr.(*StatusMessage)
+		if message == nil || !ok {
 			return errors.New("ERECV")
 		}
-		if status.Status != SUCCESS {
+		signature := message.Signature
+		message.Signature = nil
+		data := protobuf.Encode(message)
+		err := s.Verify(data, signature, message.Source)
+		if err != nil {
+			return errors.New("EVERIFY")
+		}
+		if message.Status != SUCCESS {
 			return errors.New("EFAIL")
 		}
 	}
@@ -280,9 +293,9 @@ func (s *SmallSession) ReceiveStatusMessages() error {
 
 type ShareMessage struct {
 	Nonce Nonce
-
 	Source int
 	Shares []abstract.Secret
+	Signature []byte
 }
 
 func (s *SmallSession) SendShareMessages() error {
@@ -290,7 +303,9 @@ func (s *SmallSession) SendShareMessages() error {
 	for i, share := range s.shares {
 		shares[i] = share.Share(s.Mine)
 	}
-	message := &ShareMessage{ s.Nonce, s.Mine, shares }
+	message := &ShareMessage{ s.Nonce, s.Mine, shares, nil }
+	signature := s.Sign(protobuf.Encode(message))
+	message.Signature = signature
 	return s.Broadcast(func (i int) interface{} {
 		return message
 	})
@@ -299,16 +314,23 @@ func (s *SmallSession) SendShareMessages() error {
 func (s *SmallSession) ReceiveShareMessages() error {
 	results := s.ReadAll(func() interface{} {
 		return new(ShareMessage)
-	}, true)
+	})
 
 	for pending := s.N-1; pending > 0; pending-- {
-		message := <- results
-		shares, ok := message.(*ShareMessage)
-		if shares == nil || !ok {
+		msgPtr := <- results
+		message, ok := msgPtr.(*ShareMessage)
+		if message == nil || !ok {
 			return errors.New("ERECV")
 		}
-		source := shares.Source
-		for i, share := range shares.Shares {
+		signature := message.Signature
+		message.Signature = nil
+		data := protobuf.Encode(message)
+		err := s.Verify(data, signature, message.Source)
+		if err != nil {
+			return errors.New("EVERIFY")
+		}
+		source := message.Source
+		for i, share := range message.Shares {
 			if !s.commitments[i].Check(source, share) {
 				return errors.New("ECHECK")
 			}

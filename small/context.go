@@ -82,17 +82,16 @@ func (c *Context) NextNonce() Nonce {
 }
 
 // Sign the message in the current context.
-func (c *Context) Sign(m *Message) {
+func (c *Context) Sign(message []byte) []byte {
 	self := c.Self()
-	signature := anon.Sign(c.Suite, c.Random, m.Data,
+	return anon.Sign(c.Suite, c.Random, message,
 			anon.Set{self.PubKey}, nil, 0, self.PrivKey)
-	m.Signature = signature
 }
 
 // Verify the message against the source specified in the
 // message itself.
-func (c *Context) Verify(m *Message) error {
-	key := anon.Set{c.Peers[m.Source].PubKey}
-	_, err := anon.Verify(c.Suite, m.Data, key, nil, m.Signature)
+func (c *Context) Verify(message, signature []byte, server int) error {
+	key := anon.Set{c.Peers[server].PubKey}
+	_, err := anon.Verify(c.Suite, message, key, nil, signature)
 	return err
 }

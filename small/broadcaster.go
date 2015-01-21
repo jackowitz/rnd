@@ -20,11 +20,9 @@ func (b *Broadcaster) Broadcast(constructor func(int)interface{}) error {
 		if b.IsMine(i) {
 			continue
 		}
-		data := constructor(i)
-		message := &Message{ b.Mine, protobuf.Encode(data), nil }
-		b.Sign(message)
-		raw := protobuf.Encode(message)
-		if _, err := WritePrefix(conn, raw); err != nil {
+		message := constructor(i)
+		_, err := WritePrefix(conn, protobuf.Encode(message))
+		if err != nil {
 			return err
 		}
 	}
@@ -32,7 +30,7 @@ func (b *Broadcaster) Broadcast(constructor func(int)interface{}) error {
 }
 
 func (b *Broadcaster) ReadOne(conn net.Conn, constructor func()interface{},
-		verify bool, results chan<- interface{}) {
+		results chan<- interface{}) {
 
 	// XXX should probably pull this out
 	cons := protobuf.Constructors{
@@ -47,17 +45,8 @@ func (b *Broadcaster) ReadOne(conn net.Conn, constructor func()interface{},
 	if err != nil {
 		results <- nil
 	}
-	wrapper := new(Message)
-	err = protobuf.Decode(raw, wrapper, nil)
-	if err != nil {
-		results <- nil
-	}
-	if err := b.Verify(wrapper); err != nil {
-		results <- nil
-	}
-	data := wrapper.Data
 	message := constructor()
-	err = protobuf.Decode(data, message, cons)
+	err = protobuf.Decode(raw, message, cons)
 	if err != nil {
 		results <- nil
 	}
@@ -67,13 +56,12 @@ func (b *Broadcaster) ReadOne(conn net.Conn, constructor func()interface{},
 // Higher order function for reading the same type of message from all
 // of our peers. Spawns a goroutine for each peer and delivers
 // the results on the returned channel.
-func (b *Broadcaster) ReadAll(cons func()interface{},
-		verify bool) <-chan interface{} {
+func (b *Broadcaster) ReadAll(cons func()interface{}) <-chan interface{} {
 
 	results := make(chan interface{}, b.N)
 	for i, conn := range b.Conns {
 		if b.IsMine(i) { continue }
-		go b.ReadOne(conn, cons, verify, results)
+		go b.ReadOne(conn, cons, results)
 	}
 	return results
 }
