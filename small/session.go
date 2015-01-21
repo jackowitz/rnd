@@ -27,7 +27,7 @@ type SmallSession struct {
 }
 
 func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
-		done chan<- Nonce) chan <-Connection {
+		done chan<- Nonce) chan <- net.Conn {
 
 	conns := make([]net.Conn, context.N)
 	broadcaster := &Broadcaster{ context, conns }
@@ -49,7 +49,7 @@ func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
 		session.shares[i].Empty(session.Suite, session.K, session.N)
 	}
 
-	incoming := make(chan Connection)
+	incoming := make(chan net.Conn)
 	go session.Start(incoming, replyConn, done)
 
 	return incoming
@@ -121,52 +121,49 @@ func (s *SmallSession) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) 
 
 const timeout = 3*time.Second
 
-func (s *SmallSession) Start(connChan <-chan Connection,
+func (s *SmallSession) Start(connChan <-chan net.Conn,
 		replyConn net.Conn, close chan<- Nonce) {
 
+	// Connect to all servers with ID > Mine.
 	for i := s.Mine + 1; i < s.N; i++ {
 		conn, err := net.DialTimeout("tcp", s.Peers[i].Addr, timeout)
 		if err != nil {
 			format := "Unable to connect to server at %s"
 			panic(fmt.Sprintf(format, s.Peers[i].Addr))
 		}
-		data := &AnnouncementMessage{ s.Nonce, s.Mine }
-		message := &Message{ s.Mine, protobuf.Encode(data), nil }
-		s.Sign(message)
-		raw := protobuf.Encode(message)
-		if _, err := WritePrefix(conn, raw); err != nil {
-			panic("announcement: " + err.Error())
+		buf := protobuf.Encode(&NonceMessage{ s.Nonce })
+		if _, err := WritePrefix(conn, buf); err != nil {
+			panic("Writing Nonce: " + err.Error())
 		}
 		s.Conns[i] = conn
 	}
 
-	// wait for connection from all servers with id less than ours
+	// Wait for all servers with ID < Mine.
 	for i := 0; i < s.Mine; i++ {
-		connection := <- connChan
-		s.Conns[connection.Message.Id] = connection.Conn
+		s.Conns[i] = <- connChan
 	}
 
-	// no more connections for this session, notify
-	// the main loop to clean up the map
+	// No more connections for this session.
 	close <- s.Nonce
 
-	// everyone's all wired up, so start the protocol
+	// Everyone's all wired up, start the protocol.
 	value, stopwatch := s.GenerateRandom()
+
+	// Send value back to the requester.
+	if replyConn != nil {
+		if _, err := replyConn.Write(value.Encode()); err != nil {
+			panic("Writing Reply: " + err.Error())
+		}
+		if err := replyConn.Close(); err != nil {
+			panic("Closing ReplyConn: " + err.Error())
+		}
+	}
+
+	// Dump any stats we may want.
 	if debug {
 		format := "[%d, %d] Times: %s\n"
 		fmt.Printf(format, s.N, s.K, stopwatch)
 		fmt.Printf("Value: %s\n", value.String())
-	}
-	if replyConn != nil {
-		if _, err := replyConn.Write(value.Encode()); err != nil {
-			panic("reply send: " + err.Error())
-		}
-	}
-
-	if replyConn != nil {
-		if err := replyConn.Close(); err != nil {
-			panic("reply close: " + err.Error())
-		}
 	}
 }
 

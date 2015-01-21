@@ -19,7 +19,7 @@ type ScalableSession struct {
 }
 
 func NewScalableSession(context *Context, nonce Nonce,
-		replyConn net.Conn, done chan<- Nonce) chan <-Connection {
+		replyConn net.Conn, done chan<- Nonce) chan <-net.Conn {
 
 	scalable := &ScalableSession{
 		context,
@@ -30,18 +30,17 @@ func NewScalableSession(context *Context, nonce Nonce,
 		nil,
 	}
 
-	incoming := make(chan Connection)
+	incoming := make(chan net.Conn)
 	go scalable.Start(incoming, replyConn, done)
 
 	return incoming
 }
 
-func (s *ScalableSession) Start(connChan <-chan Connection,
+func (s *ScalableSession) Start(connChan <-chan net.Conn,
 		replyConn net.Conn, close chan<- Nonce) {
 
 	// Get our connection to the leader.
-	conn := <- connChan
-	s.Conn = conn.Conn
+	s.Conn = <- connChan
 
 	fmt.Println("Started " + s.Nonce.String())
 	s.RunLottery()
@@ -58,4 +57,8 @@ func (s *ScalableSession) GenerateInitialShares() {
 
 func (s *ScalableSession) RunLottery() {
 	s.GenerateInitialShares()
+
+	if _, err := s.Conn.Write(s.C_i_p); err != nil {
+		panic("InitialHashCommit: " + err.Error())
+	}
 }

@@ -21,7 +21,7 @@ type ScalableLeaderSession struct {
 }
 
 func NewScalableLeaderSession(context *Context, nonce Nonce,
-		replyConn net.Conn, done chan<- Nonce) chan <-Connection {
+		replyConn net.Conn, done chan<- Nonce) chan <-net.Conn {
 
 	broadcaster := &Broadcaster{
 		context,
@@ -38,13 +38,13 @@ func NewScalableLeaderSession(context *Context, nonce Nonce,
 		nil,
 	}
 
-	incoming := make(chan Connection)
+	incoming := make(chan net.Conn)
 	go scalable.Start(incoming, replyConn, done)
 
 	return incoming
 }
 
-func (s *ScalableLeaderSession) Start(connChan <-chan Connection,
+func (s *ScalableLeaderSession) Start(connChan <-chan net.Conn,
 		replyConn net.Conn, close chan<- Nonce) {
 
 	// Leader connects to everybody else.
@@ -57,11 +57,8 @@ func (s *ScalableLeaderSession) Start(connChan <-chan Connection,
 			format := "Unable to connect to server at %s"
 			panic(fmt.Sprintf(format, s.Peers[i].Addr))
 		}
-		data := &AnnouncementMessage{ s.Nonce, s.Mine }
-		message := &Message{ s.Mine, protobuf.Encode(data), nil }
-		s.Sign(message)
-		raw := protobuf.Encode(message)
-		if _, err := WritePrefix(conn, raw); err != nil {
+		buf := protobuf.Encode(&NonceMessage{ s.Nonce })
+		if _, err := WritePrefix(conn, buf); err != nil {
 			panic("announcement: " + err.Error())
 		}
 		s.Conns[i] = conn
