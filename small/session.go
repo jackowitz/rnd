@@ -226,6 +226,9 @@ func (s *SmallSession) ReceiveShareCommitMessages() error {
 		if message == nil || !ok {
 			return errors.New("ERECV")
 		}
+		if message.Index != s.Mine {
+			return errors.New("ENOT_MINE")
+		}
 		signature := message.Signature
 		message.Signature = nil
 		data := protobuf.Encode(message)
@@ -316,7 +319,7 @@ func (s *SmallSession) ReceiveShareMessages() error {
 		return new(ShareMessage)
 	})
 
-	for pending := s.N-1; pending > 0; pending-- {
+	for pending := s.K-1; pending > 0; pending-- {
 		msgPtr := <- results
 		message, ok := msgPtr.(*ShareMessage)
 		if message == nil || !ok {
