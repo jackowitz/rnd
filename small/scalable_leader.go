@@ -1,41 +1,29 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
-	"github.com/dedis/crypto/abstract"
+	//"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/protobuf"
 )
 
 type ScalableLeaderSession struct {
-	*Context
+	*ScalableSessionBase
+
 	*Broadcaster
-
-	Nonce Nonce
-
-	s_i abstract.Secret
-	C_i abstract.Point
-	C_i_p []byte
-
-	V_C_p [][]byte
 }
 
 func NewScalableLeaderSession(context *Context, nonce Nonce,
 		replyConn net.Conn, done chan<- Nonce) chan <-net.Conn {
 
-	broadcaster := &Broadcaster{
-		context,
+	broadcaster := &Broadcaster {
 		make([]net.Conn, context.N),
 	}
 
-	scalable := &ScalableLeaderSession{
-		context,
+	scalable := &ScalableLeaderSession {
+		NewScalableSessionBase(context, nonce),
 		broadcaster,
-		nonce,
-		context.Suite.Secret(),
-		context.Suite.Point(),
-		nil,
-		nil,
 	}
 
 	incoming := make(chan net.Conn)
@@ -46,6 +34,9 @@ func NewScalableLeaderSession(context *Context, nonce Nonce,
 
 func (s *ScalableLeaderSession) Start(connChan <-chan net.Conn,
 		replyConn net.Conn, close chan<- Nonce) {
+
+	// Store connection channel away for later.
+	s.ConnChan = connChan
 
 	// Leader connects to everybody else.
 	for i := 0; i < s.N; i++ {
@@ -76,7 +67,49 @@ func (s *ScalableLeaderSession) GenerateInitialShares() {
 	s.C_i_p = h.Sum(nil)
 }
 
+func (s *ScalableLeaderSession) ReceiveHashCommits() error {
+	results := s.ReadAll(func()interface{} {
+		return new(HashCommitMessage)
+	}, nil)
+
+	for pending := s.N-1; pending > 0; pending-- {
+		msgPtr := <- results
+		message, ok := msgPtr.(*HashCommitMessage)
+		if message == nil || !ok {
+			return errors.New("EBAD_COMMIT")
+		}
+		s.V_C_p[message.Source] = message.Commit
+	}
+	return nil
+}
+
+type HashCommitVectorMessage struct {
+	Commits [][]byte
+}
+
+func (s *ScalableLeaderSession) SendHashCommitVector() error {
+	message := &HashCommitVectorMessage { s.V_C_p }
+	return s.Broadcast(func(i int)interface{} {
+		return message
+	})
+}
+
 func (s *ScalableLeaderSession) RunLottery() {
 	s.GenerateInitialShares()
+	s.V_C_p[s.Mine] = s.C_i_p
 
+	if err := s.ReceiveHashCommits(); err != nil {
+		panic("ReceiveHashCommits: " + err.Error())
+	}
+
+	if err := s.SendHashCommitVector(); err != nil {
+		panic("SendHashCommitVector: " + err.Error())
+	}
+
+	s.GenerateTrusteeShares(s.K, s.N)
+	if err := s.SendTrusteeShares(s.N); err != nil {
+		panic("SendTrusteeShares: " + err.Error())
+	}
+
+	s.HandleSigningRequests()
 }

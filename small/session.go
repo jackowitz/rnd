@@ -16,6 +16,7 @@ type SmallSession struct {
 	*Broadcaster
 
 	Nonce Nonce
+	cons protobuf.Constructors
 
 	r_i abstract.Secret
 	a_i *poly.PriPoly
@@ -30,12 +31,18 @@ func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
 		done chan<- Nonce) chan <- net.Conn {
 
 	conns := make([]net.Conn, context.N)
-	broadcaster := &Broadcaster{ context, conns }
+	broadcaster := &Broadcaster{ conns }
+
+	cons := protobuf.Constructors{
+		tSecret: func()interface{} { return context.Suite.Secret() },
+		tNonce: func()interface{} { return context.Suite.Secret() },
+	}
 
 	session := &SmallSession{
 		context,
 		broadcaster,
 		nonce,
+		cons,
 		context.Suite.Secret(),
 		new(poly.PriPoly),
 		new(poly.PriShares),
@@ -218,7 +225,7 @@ func (s *SmallSession) ReceiveShareCommitMessages() error {
 		message := new(ShareCommitMessage)
 		message.Commitment = commitment
 		return message
-	})
+	}, s.cons)
 
 	for pending := s.N-1; pending > 0; pending-- {
 		msgPtr := <- results
@@ -271,8 +278,8 @@ func (s *SmallSession) SendStatusMessages(status Status) error {
 
 func (s *SmallSession) ReceiveStatusMessages() error {
 	results := s.ReadAll(func() interface{} {
-		return &StatusMessage{ s.Suite.Secret(), 0, FAILURE, nil }
-	})
+		return new(StatusMessage)
+	}, s.cons)
 
 	for pending := s.N-1; pending > 0; pending-- {
 		msgPtr := <- results
@@ -317,7 +324,7 @@ func (s *SmallSession) SendShareMessages() error {
 func (s *SmallSession) ReceiveShareMessages() error {
 	results := s.ReadAll(func() interface{} {
 		return new(ShareMessage)
-	})
+	}, s.cons)
 
 	for pending := s.K-1; pending > 0; pending-- {
 		msgPtr := <- results

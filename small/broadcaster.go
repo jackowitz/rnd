@@ -7,7 +7,6 @@ import (
 )
 
 type Broadcaster struct {
-	*Context
 	Conns []net.Conn
 }
 
@@ -17,9 +16,7 @@ type Broadcaster struct {
 func (b *Broadcaster) Broadcast(constructor func(int)interface{}) error {
 
 	for i, conn := range b.Conns {
-		if b.IsMine(i) {
-			continue
-		}
+		if conn == nil { continue }
 		message := constructor(i)
 		_, err := WritePrefix(conn, protobuf.Encode(message))
 		if err != nil {
@@ -29,40 +26,41 @@ func (b *Broadcaster) Broadcast(constructor func(int)interface{}) error {
 	return nil
 }
 
-func (b *Broadcaster) ReadOne(conn net.Conn, constructor func()interface{},
-		results chan<- interface{}) {
-
-	// XXX should probably pull this out
-	cons := protobuf.Constructors{
-		tSecret: func()interface{} { return b.Suite.Secret() },
-		tNonce: func()interface{} { return b.Suite.Secret() },
-	}
+func ReadOne(conn net.Conn, structPtr interface{},
+		cons protobuf.Constructors) error {
 
 	timeout := 2 * time.Second
 	conn.SetReadDeadline(time.Now().Add(timeout))
 
 	raw, err := ReadPrefix(conn)
 	if err != nil {
-		results <- nil
+		return err
 	}
-	message := constructor()
-	err = protobuf.Decode(raw, message, cons)
+	err = protobuf.Decode(raw, structPtr, cons)
 	if err != nil {
-		results <- nil
+		return err
 	}
-	results <- message
+	return nil
 }
 
 // Higher order function for reading the same type of message from all
 // of our peers. Spawns a goroutine for each peer and delivers
 // the results on the returned channel.
-func (b *Broadcaster) ReadAll(cons func()interface{}) <-chan interface{} {
+func (b *Broadcaster) ReadAll(constructor func()interface{},
+		cons protobuf.Constructors) <-chan interface{} {
 
-	results := make(chan interface{}, b.N)
-	for i, conn := range b.Conns {
-		if b.IsMine(i) { continue }
-		go b.ReadOne(conn, cons, results)
+	results := make(chan interface{}, len(b.Conns))
+	for _, conn := range b.Conns {
+		if conn == nil { continue }
+
+		message := constructor()
+		go func(conn net.Conn, message interface{}) {
+			if err := ReadOne(conn, message, cons); err != nil {
+				results <- nil
+			} else {
+				results <- message
+			}
+		}(conn, message)
 	}
 	return results
 }
-
