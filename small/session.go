@@ -37,6 +37,7 @@ func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
 	cons := protobuf.Constructors{
 		tSecret: func()interface{} { return context.Suite.Secret() },
 		tNonce: func()interface{} { return context.Suite.Secret() },
+		tPoint: func()interface{} { return context.Suite.Point() },
 	}
 
 	session := &SmallSession{
@@ -279,6 +280,8 @@ func (s *SmallSession) SendStatusMessages(status Status) error {
 	})
 }
 
+// Wait to get a SUCCESS status message from everybody
+// before continuing on to release our shares.
 func (s *SmallSession) ReceiveStatusMessages() error {
 	results := s.ReadAll(func() interface{} {
 		return new(StatusMessage)
@@ -290,6 +293,8 @@ func (s *SmallSession) ReceiveStatusMessages() error {
 		if message == nil || !ok {
 			return errors.New("ERECV")
 		}
+
+		// No spoofing SUCCESS messages here!
 		signature := message.Signature
 		message.Signature = nil
 		data := protobuf.Encode(message)
@@ -297,6 +302,8 @@ func (s *SmallSession) ReceiveStatusMessages() error {
 		if err != nil {
 			return errors.New("EVERIFY")
 		}
+
+		// Finally make sure it's actually SUCCESS.
 		if message.Status != SUCCESS {
 			return errors.New("EFAIL")
 		}
@@ -304,18 +311,26 @@ func (s *SmallSession) ReceiveStatusMessages() error {
 	return nil
 }
 
+// Contains the normal message header of Nonce and Source,
+// plus a vector of all of the shares that belong to us.
+// Signature is over the complete contents of the message.
 type ShareMessage struct {
 	Nonce Nonce
 	Source int
+
 	Shares []abstract.Secret
 	Signature []byte
 }
 
 func (s *SmallSession) SendShareMessages() error {
+	// Flatten all of our shares for each secret into a
+	// single vector to broadcast to everyone else.
 	shares := make([]abstract.Secret, s.N)
 	for i, share := range s.shares {
 		shares[i] = share.Share(s.Mine)
 	}
+
+	// Sign the message and send it out.
 	message := &ShareMessage{ s.Nonce, s.Mine, shares, nil }
 	signature := s.Sign(protobuf.Encode(message))
 	message.Signature = signature
@@ -343,6 +358,7 @@ func (s *SmallSession) ReceiveShareMessages() error {
 		// the shares TO US (not the original owner).
 		signature := message.Signature
 		message.Signature = nil
+
 		data := protobuf.Encode(message)
 		err := s.Verify(data, signature, message.Source)
 		if err != nil {
