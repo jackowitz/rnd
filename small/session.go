@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -69,7 +70,6 @@ func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
 // the actual session.
 func (s *SmallSession) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
 
-	// Record performance/debug timings.
 	stopwatch := stopwatch.NewStopwatch()
 
 	stopwatch.Start()
@@ -85,6 +85,7 @@ func (s *SmallSession) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) 
 	stopwatch.Start()
 	status := SUCCESS
 	if err := s.ReceiveShareCommitMessages(); err != nil {
+		panic("ReceiveShareCommitMessages: " + err.Error())
 		status = FAILURE
 	}
 	stopwatch.Stop("ReceiveCommits")
@@ -113,7 +114,6 @@ func (s *SmallSession) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) 
 	}
 	stopwatch.Stop("ReceiveShares")
 
-	// XOR all the individual secrets together
 	stopwatch.Start()
 	value, err :=  s.CombineShares()
 	if err != nil {
@@ -121,12 +121,10 @@ func (s *SmallSession) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) 
 	}
 	stopwatch.Stop("CombineShares")
 
-	// XXX: this approach is group-dependent, maybe
-	// just want to return a []byte
 	return value, stopwatch
 }
 
-const timeout = 3*time.Second
+const timeout = 3 * time.Second
 
 func (s *SmallSession) Start(connChan <-chan net.Conn,
 		replyConn net.Conn, close chan<- Nonce) {
@@ -138,16 +136,31 @@ func (s *SmallSession) Start(connChan <-chan net.Conn,
 			format := "Unable to connect to server at %s"
 			panic(fmt.Sprintf(format, s.Peers[i].Addr))
 		}
+		// Send the session Nonce.
 		buf := protobuf.Encode(&NonceMessage{ s.Nonce })
 		if _, err := WritePrefix(conn, buf); err != nil {
 			panic("Writing Nonce: " + err.Error())
+		}
+		// And identify ourself.
+		n := binary.PutVarint(buf, int64(s.Mine))
+		if _, err := WritePrefix(conn, buf[:n]); err != nil {
+			panic("Writing ID: " + err.Error())
 		}
 		s.Conns[i] = conn
 	}
 
 	// Wait for all servers with ID < Mine.
 	for i := 0; i < s.Mine; i++ {
-		s.Conns[i] = <- connChan
+		conn := <- connChan
+		buf, err := ReadPrefix(conn)
+		if err != nil {
+			panic("ReadID: " + err.Error())
+		}
+		id, n := binary.Varint(buf)
+		if n < 1 {
+			panic("DecodeID")
+		}
+		s.Conns[int(id)] = conn
 	}
 
 	// No more connections for this session.
@@ -166,11 +179,9 @@ func (s *SmallSession) Start(connChan <-chan net.Conn,
 		}
 	}
 
-	// Dump any stats we may want.
 	if debug {
-		format := "[%d, %d] Times: %s\n"
-		fmt.Printf(format, s.N, s.K, stopwatch)
-		fmt.Printf("Value: %s\n", value.String())
+		format := "[%d, %d] %s\n%s"
+		fmt.Printf(format, s.N, s.K, value.String(), stopwatch)
 	}
 }
 
@@ -186,14 +197,6 @@ func (s *SmallSession) GenerateInitialShares() {
 	s.shares[s.Mine] = s.s_i
 	s.commitments[s.Mine] = s.p_i
 }
-
-type MessageType int
-const (
-	MSG_ANNOUNCE MessageType = iota
-	MSG_SHARE_COMMIT
-	MSG_STATUS
-	MSG_SHARE
-)
 
 type ShareCommitMessage struct {
 	Nonce Nonce
@@ -321,6 +324,9 @@ func (s *SmallSession) SendShareMessages() error {
 	})
 }
 
+// Receive at least K (including our own) vectors of shares
+// of secrets. This is guaranteed to be enough to allow us
+// to reconstruct everyone's original input values.
 func (s *SmallSession) ReceiveShareMessages() error {
 	results := s.ReadAll(func() interface{} {
 		return new(ShareMessage)
@@ -332,6 +338,9 @@ func (s *SmallSession) ReceiveShareMessages() error {
 		if message == nil || !ok {
 			return errors.New("ERECV")
 		}
+
+		// Make sure that it's signed by the party sending
+		// the shares TO US (not the original owner).
 		signature := message.Signature
 		message.Signature = nil
 		data := protobuf.Encode(message)
@@ -339,6 +348,11 @@ func (s *SmallSession) ReceiveShareMessages() error {
 		if err != nil {
 			return errors.New("EVERIFY")
 		}
+
+		// Now check that all shares in the vector are in
+		// line with the original commitment polynomial
+		// sent to us by the OWNER of the share in the first
+		// step of the protocol.
 		source := message.Source
 		for i, share := range message.Shares {
 			if !s.commitments[i].Check(source, share) {
@@ -350,6 +364,8 @@ func (s *SmallSession) ReceiveShareMessages() error {
 	return nil
 }
 
+// XOR all the individual secrets together to produce the final
+// random value incorporating all clients' secrets.
 func (s *SmallSession) CombineShares() (abstract.Secret, error) {
 	result := make([]byte, s.Suite.SecretLen())
 	for i := range s.shares {

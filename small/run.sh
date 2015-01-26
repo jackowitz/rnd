@@ -8,12 +8,12 @@ function start_rnd {
   fi
   n=$1
   k=$2
-  go build -o $BINARY rnd_tcp/small
+  go build -o $BINARY rnd/small
   for i in `seq 0 $(($n - 1))`; do
     #if [[ $i -eq 0 ]]; then
-      ./$BINARY -n=$n -k=$n $i &> logs/server$i.log &
+      ./$BINARY -n=$n -k=$k $i &> logs/server$i.log &
     #else
-    #  ./$BINARY -n=$n -k=$n $i &> /dev/null &
+    #  ./$BINARY -n=$n -k=$k $i &> /dev/null &
     #fi
   done
   echo "Started $n servers."
