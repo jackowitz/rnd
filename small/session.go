@@ -8,7 +8,7 @@ import (
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/poly"
 	"github.com/dedis/crypto/protobuf"
-	"rnd_tcp/stopwatch"
+	"rnd/stopwatch"
 )
 
 type SmallSession struct {

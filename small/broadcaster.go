@@ -30,6 +30,12 @@ func ReadOne(conn net.Conn, structPtr interface{},
 		cons protobuf.Constructors) error {
 
 	timeout := 2 * time.Second
+	return ReadOneTimeout(conn, structPtr, cons, timeout)
+}
+
+func ReadOneTimeout(conn net.Conn, structPtr interface{},
+		cons protobuf.Constructors, timeout time.Duration) error {
+
 	conn.SetReadDeadline(time.Now().Add(timeout))
 
 	raw, err := ReadPrefix(conn)

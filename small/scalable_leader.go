@@ -26,7 +26,7 @@ func NewScalableLeaderSession(context *Context, nonce Nonce,
 		broadcaster,
 	}
 
-	incoming := make(chan net.Conn)
+	incoming := make(chan net.Conn, context.N)
 	go scalable.Start(incoming, replyConn, done)
 
 	return incoming
@@ -94,6 +94,37 @@ func (s *ScalableLeaderSession) SendHashCommitVector() error {
 	})
 }
 
+func (s *ScalableLeaderSession) ReceiveSignatureVectors() error {
+	fmt.Println("Waiting for signature vectors...")
+	results := s.ReadAll(func()interface{} {
+		return new(SignatureVectorMessage)
+	}, nil)
+
+	for pending := s.N-1; pending > 0; pending-- {
+		msgPtr := <- results
+		message, ok := msgPtr.(*SignatureVectorMessage)
+		if message == nil || !ok {
+			return errors.New("EBAD_COMMIT")
+		}
+		s.signatureVector[message.Source] = message
+	}
+	fmt.Println("Got all signature vectors.")
+	return nil
+}
+
+type SignatureVectorVectorMessage struct {
+	Signatures []*SignatureVectorMessage
+}
+
+func (s *ScalableLeaderSession) SendSignatureVectorVector() error {
+	message := &SignatureVectorVectorMessage {
+		s.signatureVector,
+	}
+	return s.Broadcast(func(i int)interface{} {
+		return message
+	})
+}
+
 func (s *ScalableLeaderSession) RunLottery() {
 	s.GenerateInitialShares()
 	s.V_C_p[s.Mine] = s.C_i_p
@@ -106,10 +137,17 @@ func (s *ScalableLeaderSession) RunLottery() {
 		panic("SendHashCommitVector: " + err.Error())
 	}
 
+	go s.HandleSigningRequests()
 	s.GenerateTrusteeShares(s.K, s.N)
 	if err := s.SendTrusteeShares(s.N); err != nil {
 		panic("SendTrusteeShares: " + err.Error())
 	}
 
-	s.HandleSigningRequests()
+	if err := s.ReceiveSignatureVectors(); err != nil {
+		panic("ReceiveSignatureVectors: " + err.Error())
+	}
+
+	if err := s.SendSignatureVectorVector(); err != nil {
+		panic("SendSignatureVectorVector: " + err.Error())
+	}
 }

@@ -15,6 +15,8 @@ import (
 // Common to both the leader and the others.
 type ScalableSessionBase struct {
 	*Context
+	cons protobuf.Constructors
+
 	Nonce Nonce
 	ConnChan <-chan net.Conn
 
@@ -27,13 +29,26 @@ type ScalableSessionBase struct {
 	a_i *poly.PriPoly
 	sh_i *poly.PriShares
 	p_i *poly.PubPoly
+
+	// second round trustee stuff
+	shares map[uint32]abstract.Secret
+	signatures []*TrusteeSignatureMessage
+
+	// third round reporting of signatures
+	signatureVector []*SignatureVectorMessage
 }
 
 func NewScalableSessionBase(context *Context,
 		nonce Nonce) *ScalableSessionBase {
 
+	cons := protobuf.Constructors {
+		tSecret: func()interface{} { return context.Suite.Secret() },
+		tNonce: func()interface{} { return context.Suite.Secret() },
+		tPoint: func()interface{} { return context.Suite.Point() },
+	}
 	return &ScalableSessionBase {
 		context,
+		cons,
 		nonce,
 		nil,
 		context.Suite.Secret(),
@@ -43,6 +58,9 @@ func NewScalableSessionBase(context *Context,
 		new(poly.PriPoly),
 		new(poly.PriShares),
 		new(poly.PubPoly),
+		nil,
+		nil,
+		nil,
 	}
 }
 
@@ -62,10 +80,51 @@ func (s *ScalableSessionBase) GenerateTrusteeShares(Q, R int) {
 }
 
 type TrusteeShareMessage struct {
-	Source int
+	Source, Index int
 	Share abstract.Secret
 	Commitment interface{} //poly.PubPoly
 }
+
+type TrusteeSignatureMessage struct {
+	Trustee, Source, Index int
+	//Signature []byte
+}
+
+func (s *ScalableSessionBase) DoTrusteeExchange(i,
+		trustee int) (*TrusteeSignatureMessage, error) {
+
+	conn, err := net.DialTimeout("tcp", s.Peers[trustee].Addr, timeout)
+	if err != nil {
+		return nil, err
+	}
+
+	// send session nonce
+	announce := &NonceMessage{ s.Nonce }
+	_, err = WritePrefix(conn, protobuf.Encode(announce))
+	if err != nil {
+		return nil, err
+	}
+
+	// send share to trustee
+	message := &TrusteeShareMessage{
+		s.Mine, i,
+		s.sh_i.Share(i),
+		s.p_i,
+	}
+	_, err = WritePrefix(conn, protobuf.Encode(message))
+	if err != nil {
+		return nil, err
+	}
+
+	// wait to get signature back
+	reply := new(TrusteeSignatureMessage)
+	if err := ReadOneTimeout(conn, reply, nil, time.Second); err != nil {
+		return nil, err
+	}
+	conn.Close()
+	return reply, nil
+}
+
 
 func (s *ScalableSessionBase) SendTrusteeShares(R int) error {
 	// Seed with H(V_C_p, C_i)
@@ -73,7 +132,7 @@ func (s *ScalableSessionBase) SendTrusteeShares(R int) error {
 	for _, C_p := range s.V_C_p {
 		h.Write(C_p)
 	}
-	h.Write(protobuf.Encode(s.C_i))
+	h.Write(s.C_i.Encode())
 	seedBytes := h.Sum(nil)
 
 	// Convoluted mechanism here... all we're trying to do is
@@ -88,59 +147,76 @@ func (s *ScalableSessionBase) SendTrusteeShares(R int) error {
 	selected := trusteeRandom.Perm(s.N)[:R]
 
 	// Send the share and C_i to each selected trustee.
+	results := make(chan *TrusteeSignatureMessage, R)
+
 	for i, trustee := range selected {
 		if trustee == s.Mine { continue }
 
-		conn, err := net.DialTimeout("tcp", s.Peers[trustee].Addr, timeout)
-		if err != nil {
-			format := "Unable to connect to trustee at %s"
-			panic(fmt.Sprintf(format, s.Peers[trustee].Addr))
-		}
-
-		// send session nonce
-		announce := &NonceMessage{ s.Nonce }
-		_, err = WritePrefix(conn, protobuf.Encode(announce))
-		if err != nil {
-			panic("announcement: " + err.Error())
-		}
-
-		// send share to trustee
-		message := &TrusteeShareMessage{
-			s.Mine,
-			s.sh_i.Share(i),
-			s.p_i,
-		}
-		_, err = WritePrefix(conn, protobuf.Encode(message))
-		if err != nil {
-			panic("announcement: " + err.Error())
-		}
+		go func(i, trustee int) {
+			reply, err := s.DoTrusteeExchange(i, trustee)
+			if err != nil {
+				fmt.Println("Exchange: " + err.Error())
+				results <- nil
+			}
+			results <- reply
+		}(i, trustee)
 	}
 
+	s.signatures = make([]*TrusteeSignatureMessage, R)
+	nilCount := 0
+	for i := 0; i < R-1; i++ {
+		message := <- results
+		if message == nil {
+			nilCount++
+			continue
+		}
+		s.signatures[message.Index] = message
+	}
 	return nil
 }
 
 func (s *ScalableSessionBase) HandleSigningRequests() error {
 	timeout := time.After(time.Second * 5)
 
+	results := make(chan *TrusteeShareMessage)
+	s.shares = make(map[uint32]abstract.Secret)
+Listen:
 	for {
 		select {
-		case <-timeout:
-			break
+		case <- timeout:
+			break Listen
 		case conn := <- s.ConnChan:
-			commitment := new(poly.PubPoly)
-			commitment.Init(s.Suite, s.K, nil)
+			go func(conn net.Conn) {
+				commitment := new(poly.PubPoly)
+				commitment.Init(s.Suite, s.K, nil)
 
-			message := new(TrusteeShareMessage)
-			message.Share = s.Suite.Secret()
-			message.Commitment = commitment
+				message := new(TrusteeShareMessage)
+				message.Share = s.Suite.Secret()
+				message.Commitment = commitment
 
-			err := ReadOne(conn, message, nil)
-			if err != nil {
-				panic("HandleSigningRequests :" + err.Error())
-			}
-			break
+				err := ReadOne(conn, message, nil)
+				if err != nil {
+					results <- nil
+					return
+				}
+				results <- message
+
+				reply := &TrusteeSignatureMessage {
+					s.Mine, message.Source, message.Index,
+				}
+				_, err = WritePrefix(conn, protobuf.Encode(reply))
+				if err != nil {
+					results <- nil
+					return
+				}
+			}(conn)
+		case message := <- results:
+			key := uint32(message.Source << 16 | message.Index)
+			s.shares[key] = message.Share
 		}
 	}
+	fmt.Println("Done accepting signing requests.")
+	fmt.Printf("Holding %d shares.\n", len(s.shares))
 	return nil
 }
 
@@ -159,7 +235,7 @@ func NewScalableSession(context *Context, nonce Nonce,
 		nil,
 	}
 
-	incoming := make(chan net.Conn)
+	incoming := make(chan net.Conn, context.N)
 	go scalable.Start(incoming, replyConn, done)
 
 	return incoming
@@ -198,9 +274,34 @@ func (s *ScalableSession) ReceiveHashCommitVector() error {
 	return nil
 }
 
-func (s *ScalableSession) RunLottery() {
-	s.GenerateInitialShares()
+type SignatureVectorMessage struct {
+	Source int
+	Commit abstract.Point
+	Signatures []*TrusteeSignatureMessage
+}
 
+func (s *ScalableSession) SendSignatureVector() error {
+	message := protobuf.Encode(&SignatureVectorMessage{
+		s.Mine, s.C_i, s.signatures,
+	})
+	_, err := WritePrefix(s.Conn, message)
+	fmt.Println("Sent SignatureVector.")
+	return err
+}
+
+func (s *ScalableSession) ReceiveSignatureVectorVector() error {
+	message := new(SignatureVectorVectorMessage)
+	if err := ReadOne(s.Conn, message, nil); err != nil {
+		return err
+	}
+	s.signatureVector = message.Signatures
+	fmt.Println("Got SignatureVectorVector.")
+	return nil
+}
+
+func (s *ScalableSession) RunLottery() {
+
+	s.GenerateInitialShares()
 	if err := s.SendHashCommit(); err != nil {
 		panic("SendHashCommit: " + err.Error())
 	}
@@ -209,10 +310,17 @@ func (s *ScalableSession) RunLottery() {
 		panic("ReceiveHashCommitVector: " + err.Error())
 	}
 
+	go s.HandleSigningRequests()
 	s.GenerateTrusteeShares(s.K, s.N)
 	if err := s.SendTrusteeShares(s.N); err != nil {
 		panic("SendTrusteeShares: " + err.Error())
 	}
 
-	s.HandleSigningRequests()
+	if err := s.SendSignatureVector(); err != nil {
+		panic("SendSignatureVector: " + err.Error())
+	}
+
+	if err := s.ReceiveSignatureVectorVector(); err != nil {
+		panic("ReceiveSignatureVectorVector: " + err.Error())
+	}
 }
