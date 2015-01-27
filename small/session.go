@@ -28,6 +28,11 @@ type SmallSession struct {
 	commitments []*poly.PubPoly
 }
 
+// Starts a new session in the given context. The session is identified
+// by the provided nonce and produces a single random value.
+// Returns immediately with a channel on which subsequent connections
+// to the session are delivered but spawns a new goroutine to run
+// the actual session.
 func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
 		done chan<- Nonce) chan <- net.Conn {
 
@@ -64,11 +69,6 @@ func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
 	return incoming
 }
 
-// Starts a new session in the given context. The session is identified
-// by the provided nonce and produces a single random value.
-// Returns immediately with a channel on which subsequent connections
-// to the session are delivered but spawns a new goroutine to run
-// the actual session.
 func (s *SmallSession) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
 
 	stopwatch := stopwatch.NewStopwatch()

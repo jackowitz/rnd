@@ -36,6 +36,9 @@ type ScalableSessionBase struct {
 
 	// third round reporting of signatures
 	signatureVector []*SignatureVectorMessage
+
+	// fourth round, secrets finally released
+	secretVector []abstract.Secret
 }
 
 func NewScalableSessionBase(context *Context,
@@ -58,6 +61,7 @@ func NewScalableSessionBase(context *Context,
 		new(poly.PriPoly),
 		new(poly.PriShares),
 		new(poly.PubPoly),
+		nil,
 		nil,
 		nil,
 		nil,
@@ -291,11 +295,39 @@ func (s *ScalableSession) SendSignatureVector() error {
 
 func (s *ScalableSession) ReceiveSignatureVectorVector() error {
 	message := new(SignatureVectorVectorMessage)
-	if err := ReadOne(s.Conn, message, nil); err != nil {
+	if err := ReadOne(s.Conn, message, s.cons); err != nil {
 		return err
 	}
 	s.signatureVector = message.Signatures
 	fmt.Println("Got SignatureVectorVector.")
+	return nil
+}
+
+type SecretMessage struct {
+	Source int
+	Secret abstract.Secret
+}
+
+func (s *ScalableSession) SendSecret() error {
+	message := protobuf.Encode(&SecretMessage{
+		s.Mine, s.s_i,
+	})
+	_, err := WritePrefix(s.Conn, message)
+	fmt.Println("Sent Secret.")
+	return err
+}
+
+func (s *ScalableSession) ReceiveSecretVector() error {
+	message := new(SecretVectorMessage)
+	if err := ReadOne(s.Conn, message, s.cons); err != nil {
+		return err
+	}
+	fmt.Println("Got secret vector.")
+	return nil
+}
+
+func (s *ScalableSessionBase) CalculateTicket() error {
+	//h := s.Suite.Hash()
 	return nil
 }
 
@@ -322,5 +354,13 @@ func (s *ScalableSession) RunLottery() {
 
 	if err := s.ReceiveSignatureVectorVector(); err != nil {
 		panic("ReceiveSignatureVectorVector: " + err.Error())
+	}
+
+	if err := s.SendSecret(); err != nil {
+		panic("SendSecret: " + err.Error())
+	}
+
+	if err := s.ReceiveSecretVector(); err != nil {
+		panic("ReceiveSecretVector: " + err.Error())
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	//"github.com/dedis/crypto/abstract"
+	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/protobuf"
 )
 
@@ -70,7 +70,7 @@ func (s *ScalableLeaderSession) GenerateInitialShares() {
 func (s *ScalableLeaderSession) ReceiveHashCommits() error {
 	results := s.ReadAll(func()interface{} {
 		return new(HashCommitMessage)
-	}, nil)
+	}, s.cons)
 
 	for pending := s.N-1; pending > 0; pending-- {
 		msgPtr := <- results
@@ -98,8 +98,9 @@ func (s *ScalableLeaderSession) ReceiveSignatureVectors() error {
 	fmt.Println("Waiting for signature vectors...")
 	results := s.ReadAll(func()interface{} {
 		return new(SignatureVectorMessage)
-	}, nil)
+	}, s.cons)
 
+	s.signatureVector = make([]*SignatureVectorMessage, s.N)
 	for pending := s.N-1; pending > 0; pending-- {
 		msgPtr := <- results
 		message, ok := msgPtr.(*SignatureVectorMessage)
@@ -120,6 +121,39 @@ func (s *ScalableLeaderSession) SendSignatureVectorVector() error {
 	message := &SignatureVectorVectorMessage {
 		s.signatureVector,
 	}
+	fmt.Println("Sent signature vector vector.")
+	return s.Broadcast(func(i int)interface{} {
+		return message
+	})
+}
+
+func (s *ScalableLeaderSession) ReceiveSecrets() error {
+	results := s.ReadAll(func()interface{} {
+		return new(SecretMessage)
+	}, s.cons)
+
+	s.secretVector = make([]abstract.Secret, s.N)
+	for pending := s.N-1; pending > 0; pending-- {
+		msgPtr := <- results
+		message, ok := msgPtr.(*SecretMessage)
+		if message == nil || !ok {
+			return errors.New("EBAD_COMMIT")
+		}
+		s.secretVector[message.Source] = message.Secret
+	}
+	fmt.Println("Got all secrets.")
+	return nil
+}
+
+type SecretVectorMessage struct {
+	Secrets []abstract.Secret
+}
+
+func (s *ScalableLeaderSession) SendSecretVector() error {
+	message := &SecretVectorMessage{
+		s.secretVector,
+	}
+	fmt.Println("Sent secret vector.")
 	return s.Broadcast(func(i int)interface{} {
 		return message
 	})
@@ -149,5 +183,13 @@ func (s *ScalableLeaderSession) RunLottery() {
 
 	if err := s.SendSignatureVectorVector(); err != nil {
 		panic("SendSignatureVectorVector: " + err.Error())
+	}
+
+	if err := s.ReceiveSecrets(); err != nil {
+		panic("ReceiveSecrets: " + err.Error())
+	}
+
+	if err := s.SendSecretVector(); err != nil {
+		panic("SendSecretVector: " + err.Error())
 	}
 }
