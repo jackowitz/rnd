@@ -322,12 +322,26 @@ func (s *ScalableSession) ReceiveSecretVector() error {
 	if err := ReadOne(s.Conn, message, s.cons); err != nil {
 		return err
 	}
+	s.secretVector = message.Secrets
 	fmt.Println("Got secret vector.")
 	return nil
 }
 
-func (s *ScalableSessionBase) CalculateTicket() error {
-	//h := s.Suite.Hash()
+func (s *ScalableSessionBase) CalculateTickets() error {
+	for i := 0; i < s.N; i++ {
+		h := s.Suite.Hash()
+		for _, sig := range s.signatureVector {
+			h.Write(protobuf.Encode(sig))
+		}
+		for _, secret := range s.secretVector {
+			h.Write(secret.Encode())
+		}
+		buf := make([]byte, h.Size())
+		binary.PutVarint(buf, int64(i))
+		h.Write(buf)
+		ticket := h.Sum(nil)
+		fmt.Printf("%d: %s\n", i, string(ticket))
+	}
 	return nil
 }
 
@@ -362,5 +376,9 @@ func (s *ScalableSession) RunLottery() {
 
 	if err := s.ReceiveSecretVector(); err != nil {
 		panic("ReceiveSecretVector: " + err.Error())
+	}
+
+	if err := s.CalculateTickets(); err != nil {
+		panic("CalculateTickets: " + err.Error())
 	}
 }

@@ -101,6 +101,9 @@ func (s *ScalableLeaderSession) ReceiveSignatureVectors() error {
 	}, s.cons)
 
 	s.signatureVector = make([]*SignatureVectorMessage, s.N)
+	s.signatureVector[s.Mine] = &SignatureVectorMessage{
+		s.Mine, s.C_i, s.signatures,
+	}
 	for pending := s.N-1; pending > 0; pending-- {
 		msgPtr := <- results
 		message, ok := msgPtr.(*SignatureVectorMessage)
@@ -133,6 +136,7 @@ func (s *ScalableLeaderSession) ReceiveSecrets() error {
 	}, s.cons)
 
 	s.secretVector = make([]abstract.Secret, s.N)
+	s.secretVector[s.Mine] = s.s_i
 	for pending := s.N-1; pending > 0; pending-- {
 		msgPtr := <- results
 		message, ok := msgPtr.(*SecretMessage)
@@ -191,5 +195,9 @@ func (s *ScalableLeaderSession) RunLottery() {
 
 	if err := s.SendSecretVector(); err != nil {
 		panic("SendSecretVector: " + err.Error())
+	}
+
+	if err := s.CalculateTickets(); err != nil {
+		panic("CalculateTickets: " + err.Error())
 	}
 }
