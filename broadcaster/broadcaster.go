@@ -1,9 +1,10 @@
-package main
+package broadcaster
 
 import (
 	"net"
 	"time"
 	"github.com/dedis/crypto/protobuf"
+	"rnd/prefix"
 )
 
 // A Broadcaster is an abstraction enabling interaction with a set
@@ -27,7 +28,7 @@ func (b *Broadcaster) Broadcast(constructor func(int)interface{}) error {
 		if conn == nil { continue }
 
 		message := constructor(i)
-		_, err := WritePrefix(conn, protobuf.Encode(message))
+		_, err := prefix.WritePrefix(conn, protobuf.Encode(message))
 		if err != nil {
 			return err
 		}
@@ -47,7 +48,7 @@ func ReadOneTimeout(conn net.Conn, structPtr interface{},
 
 	conn.SetReadDeadline(time.Now().Add(timeout))
 
-	raw, err := ReadPrefix(conn)
+	raw, err := prefix.ReadPrefix(conn)
 	if err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/nist"
 	"github.com/dedis/crypto/random"
+	"rnd/prefix"
 )
 
 type Server struct {
@@ -54,7 +55,7 @@ func (s *Server) HandleConnection(conn net.Conn,
 		context *Context) error {
 
 	// Extract the nonce that identifies the session.
-	buf, err := ReadPrefix(conn);
+	buf, err := prefix.ReadPrefix(conn);
 	if err != nil {
 		return err
 	}

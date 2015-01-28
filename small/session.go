@@ -9,12 +9,14 @@ import (
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/poly"
 	"github.com/dedis/crypto/protobuf"
+	"rnd/broadcaster"
+	"rnd/prefix"
 	"rnd/stopwatch"
 )
 
 type Session struct {
 	*Context
-	*Broadcaster
+	*broadcaster.Broadcaster
 
 	Nonce Nonce
 	cons protobuf.Constructors
@@ -37,7 +39,7 @@ func NewSession(context *Context, nonce Nonce, replyConn net.Conn,
 		done chan<- Nonce) chan <- net.Conn {
 
 	conns := make([]net.Conn, context.N)
-	broadcaster := NewBroadcaster(conns)
+	broadcaster := broadcaster.NewBroadcaster(conns)
 
 	cons := protobuf.Constructors{
 		tSecret: func()interface{} { return context.Suite.Secret() },
@@ -139,12 +141,12 @@ func (s *Session) Start(connChan <-chan net.Conn,
 		}
 		// Send the session Nonce.
 		buf := s.Nonce.Encode()
-		if _, err := WritePrefix(conn, buf); err != nil {
+		if _, err := prefix.WritePrefix(conn, buf); err != nil {
 			panic("Writing Nonce: " + err.Error())
 		}
 		// And identify ourself.
 		n := binary.PutVarint(buf, int64(s.Mine))
-		if _, err := WritePrefix(conn, buf[:n]); err != nil {
+		if _, err := prefix.WritePrefix(conn, buf[:n]); err != nil {
 			panic("Writing ID: " + err.Error())
 		}
 		s.Conns[i] = conn
@@ -153,7 +155,7 @@ func (s *Session) Start(connChan <-chan net.Conn,
 	// Wait for all servers with ID < Mine.
 	for i := 0; i < s.Mine; i++ {
 		conn := <- connChan
-		buf, err := ReadPrefix(conn)
+		buf, err := prefix.ReadPrefix(conn)
 		if err != nil {
 			panic("ReadID: " + err.Error())
 		}
