@@ -69,10 +69,7 @@ func main() {
 
 	// Determine the context and protocol at runtime.
 	context := NewContext(suite, random, config)
+	protocol := new(SmallProtocol)
 
-	requestsPort := 0
-	if id == 0 {
-		requestsPort = 7999
-	}
-	NewServer().Start(context, requestsPort)
+	NewServer(context, protocol).Start()
 }

@@ -77,6 +77,10 @@ func NewContext(suite abstract.Suite,
 	return &Context{ suite, random, config}
 }
 
+func (c *Context) NextNonce() Nonce {
+	return c.Suite.Secret().Pick(c.Random)
+}
+
 // Sign the message in the current context.
 func (c *Context) Sign(message []byte) []byte {
 	self := c.Self()

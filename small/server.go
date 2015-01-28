@@ -1,91 +1,114 @@
 package main
 
 import (
+	"crypto/cipher"
+	"fmt"
 	"net"
-	"github.com/dedis/crypto/protobuf"
+	"github.com/dedis/crypto/abstract"
+	"github.com/dedis/crypto/nist"
+	"github.com/dedis/crypto/random"
 )
 
 type Server struct {
-	*Context
-	Protocol
+	// For handling nonce-related stuff.
+	suite abstract.Suite
+	random cipher.Stream
 
 	// Session management stuff.
 	sessions map[string] chan <-net.Conn
 	done chan Nonce
 }
 
-func (s *Server) AcceptsRequests() bool {
-	return s.Mine == 0
+// Returns an empty nonce for decoding into.
+func (s *Server) NewNonce() Nonce {
+	return s.suite.Secret()
 }
 
-func NewServer(context *Context, protocol Protocol) *Server {
+// Returns a random nonce for identify a new session.
+func (s *Server) NextNonce() Nonce {
+	return s.suite.Secret().Pick(s.random)
+}
+
+// Creates and returns a new server, ready to be started.
+func NewServer() *Server {
+
+	suite := nist.NewAES128SHA256P256()
+	random := random.Stream
 
 	sessions := make(map[string]chan <-net.Conn)
 	done := make(chan Nonce)
 
 	return &Server{
-		context,
-		protocol,
+		suite,
+		random,
 		sessions,
 		done,
 	}
 }
 
-// Need to wrap Nonce to play nice with protobuf.
-type NonceMessage struct {
-	Nonce Nonce
-}
+// Helper for handling connections from peers within the
+// protocol. Basically just keeps track of forwarding
+// new connections to the proper session, creating it
+// first if necessary.
+func (s *Server) HandleConnection(conn net.Conn,
+		context *Context) error {
 
-func (s *Server) HandleConnection(conn net.Conn) error {
-	// Extract the Nonce.
+	// Extract the nonce that identifies the session.
 	buf, err := ReadPrefix(conn);
 	if err != nil {
 		return err
 	}
-	message := &NonceMessage{ s.Suite.Secret() }
-	if err := protobuf.Decode(buf, message, nil); err != nil {
+	nonce := s.NewNonce()
+	if err := nonce.Decode(buf); err != nil {
 		return err
 	}
-	nonce := message.Nonce
 
-	// See if there's already a session for that Nonce and,
-	// if not, start up a new one.
+	// See if there's already a session for that nonce;
+	// if not, start up a new one and record it.
 	forward, ok := s.sessions[nonce.String()]
 	if !ok {
-		forward = s.NewSession(s.Context, nonce, nil, s.done)
+		forward = NewSession(context, nonce, nil, s.done)
 		s.sessions[nonce.String()] = forward
 	}
 
-	// Finally, forward the connection to the proper Session.
+	// Forward the connection to the proper session.
 	forward <- conn
 	return nil
 }
 
-func (s *Server) Start() {
+// This is where the bulk of the server work is done. Comments
+// near the main loop should explain things nicely.
+func (s *Server) Start(context *Context, requestsPort int) {
+
 	// Start listening for connections from peers.
-	incoming, err := Listen(s.Self().Addr)
+	incoming, err := Listen(context.Self().Addr)
 	if err != nil {
 		panic("ListenPeers: " + err.Error())
 	}
 
-	// Leader listens for requests to generate values.
+	// Optionally listen for requests to start sessions.
 	var requests <-chan net.Conn
-	if s.AcceptsRequests() {
-		requests, err = Listen(":7999")
+	if requestsPort > 1024 {
+		addr := fmt.Sprintf(":%d", requestsPort)
+		requests, err = Listen(addr)
 		if err != nil {
 			panic("ListenRequests: " + err.Error())
 		}
 	}
 
+	// The main server loop, multiplexes between connections from
+	// peers in the protocol, from external initiation of requests
+	// to spawn new sessions, and from notifications from sessions
+	// that they have completed.
 	for {
 		select {
 		case conn := <-incoming:
-			if err := s.HandleConnection(conn); err != nil {
+			if err := s.HandleConnection(conn, context); err != nil {
 				panic("HandleConnection: " + err.Error())
 			}
 		case conn := <-requests:
 			nonce := s.NextNonce()
-			forward := s.NewLeaderSession(s.Context, nonce, conn, s.done)
+			forward := NewSession(context, nonce, conn, s.done)
 			s.sessions[nonce.String()] = forward
 		case nonce := <-s.done:
 			forward, ok := s.sessions[nonce.String()]
@@ -98,7 +121,8 @@ func (s *Server) Start() {
 }
 
 // Spawns a new goroutine and returns immediately with a channel
-// on which that goroutine delivers accepted connections.
+// on which that goroutine delivers accepted connections. The
+// goroutine loops infinitely waiting for new connections.
 func Listen(addr string) (<-chan net.Conn, error) {
 	server, err := net.Listen("tcp", addr)
 	if err != nil {

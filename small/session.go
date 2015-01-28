@@ -12,7 +12,7 @@ import (
 	"rnd/stopwatch"
 )
 
-type SmallSession struct {
+type Session struct {
 	*Context
 	*Broadcaster
 
@@ -33,11 +33,11 @@ type SmallSession struct {
 // Returns immediately with a channel on which subsequent connections
 // to the session are delivered but spawns a new goroutine to run
 // the actual session.
-func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
+func NewSession(context *Context, nonce Nonce, replyConn net.Conn,
 		done chan<- Nonce) chan <- net.Conn {
 
 	conns := make([]net.Conn, context.N)
-	broadcaster := &Broadcaster{ conns }
+	broadcaster := NewBroadcaster(conns)
 
 	cons := protobuf.Constructors{
 		tSecret: func()interface{} { return context.Suite.Secret() },
@@ -45,7 +45,7 @@ func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
 		tPoint: func()interface{} { return context.Suite.Point() },
 	}
 
-	session := &SmallSession{
+	session := &Session{
 		context,
 		broadcaster,
 		nonce,
@@ -69,7 +69,7 @@ func NewSmallSession(context *Context, nonce Nonce, replyConn net.Conn,
 	return incoming
 }
 
-func (s *SmallSession) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
+func (s *Session) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
 
 	stopwatch := stopwatch.NewStopwatch()
 
@@ -127,7 +127,7 @@ func (s *SmallSession) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) 
 
 const timeout = 3 * time.Second
 
-func (s *SmallSession) Start(connChan <-chan net.Conn,
+func (s *Session) Start(connChan <-chan net.Conn,
 		replyConn net.Conn, close chan<- Nonce) {
 
 	// Connect to all servers with ID > Mine.
@@ -138,7 +138,7 @@ func (s *SmallSession) Start(connChan <-chan net.Conn,
 			panic(fmt.Sprintf(format, s.Peers[i].Addr))
 		}
 		// Send the session Nonce.
-		buf := protobuf.Encode(&NonceMessage{ s.Nonce })
+		buf := s.Nonce.Encode()
 		if _, err := WritePrefix(conn, buf); err != nil {
 			panic("Writing Nonce: " + err.Error())
 		}
@@ -189,7 +189,7 @@ func (s *SmallSession) Start(connChan <-chan net.Conn,
 // Generates all of the values that we need to contribute to the
 // protocol. Also stows away the shares that we need to "distribute"
 // to ourself.
-func (s *SmallSession) GenerateInitialShares() {
+func (s *Session) GenerateInitialShares() {
 	s.r_i.Pick(s.Random)
 	s.a_i.Pick(s.Suite, s.K, s.r_i, s.Random)
 	s.s_i.Split(s.a_i, s.N)
@@ -207,7 +207,7 @@ type ShareCommitMessage struct {
 	Signature []byte
 }
 
-func (s *SmallSession) SendShareCommitMessages() error {
+func (s *Session) SendShareCommitMessages() error {
 	return s.Broadcast(func (i int) interface{} {
 		message := &ShareCommitMessage{ s.Nonce, i,
 				s.Mine, s.s_i.Share(i), s.p_i, nil }
@@ -220,7 +220,7 @@ func (s *SmallSession) SendShareCommitMessages() error {
 // Tries to receive a ShareCommitMessage from all N peers. If we
 // get fewer than N, we error out, since we want the initial shares
 // from everybody, not just threshold K.
-func (s *SmallSession) ReceiveShareCommitMessages() error {
+func (s *Session) ReceiveShareCommitMessages() error {
 
 	results := s.ReadAll(func() interface{} {
 		commitment := new(poly.PubPoly)
@@ -281,7 +281,7 @@ type StatusMessage struct {
 	Signature []byte
 }
 
-func (s *SmallSession) SendStatusMessages(status Status) error {
+func (s *Session) SendStatusMessages(status Status) error {
 	message := &StatusMessage{ s.Nonce, s.Mine, status, nil }
 	signature := s.Sign(protobuf.Encode(message))
 	message.Signature = signature
@@ -292,7 +292,7 @@ func (s *SmallSession) SendStatusMessages(status Status) error {
 
 // Wait to get a SUCCESS status message from everybody
 // before continuing on to release our shares.
-func (s *SmallSession) ReceiveStatusMessages() error {
+func (s *Session) ReceiveStatusMessages() error {
 	results := s.ReadAll(func() interface{} {
 		return new(StatusMessage)
 	}, s.cons)
@@ -333,7 +333,8 @@ type ShareMessage struct {
 	Signature []byte
 }
 
-func (s *SmallSession) SendShareMessages() error {
+func (s *Session) SendShareMessages() error {
+
 	// Flatten all of our shares for each secret into a
 	// single vector to broadcast to everyone else.
 	shares := make([]abstract.Secret, s.N)
@@ -354,7 +355,7 @@ func (s *SmallSession) SendShareMessages() error {
 // of secrets. This is guaranteed to be enough to allow us
 // to reconstruct everyone's original input values. See inline
 // comment for more details.
-func (s *SmallSession) ReceiveShareMessages() error {
+func (s *Session) ReceiveShareMessages() error {
 
 	results := s.ReadAll(func() interface{} {
 		return new(ShareMessage)
@@ -426,7 +427,7 @@ func (s *SmallSession) ReceiveShareMessages() error {
 // blindly and then checking against the commitment should be
 // much faster than checking the shares. It can, of course,
 // fail if someone sent a bad share.
-func (s *SmallSession) TryRecover() error {
+func (s *Session) TryRecover() error {
 	for i := range s.shares {
 		recovered := s.shares[i].Secret()
 		check := s.Suite.Point().Mul(nil, recovered)
@@ -442,7 +443,7 @@ func (s *SmallSession) TryRecover() error {
 // shares but failed because someone sent a bad share,
 // then we need to go back and check all shares we got and
 // remove any bad ones, so we can successfully recover later.
-func (s *SmallSession) PruneShares() {
+func (s *Session) PruneShares() {
 	for i := range s.shares {
 		for j := 0; j < s.N; j++ {
 			share := s.shares[i].Share(j)
@@ -459,7 +460,7 @@ func (s *SmallSession) PruneShares() {
 // random value incorporating all clients' secrets. We may panic
 // if we didn't get enough good shares, but this goes against our
 // assumptions anyway.
-func (s *SmallSession) CombineShares() (abstract.Secret, error) {
+func (s *Session) CombineShares() (abstract.Secret, error) {
 	result := make([]byte, s.Suite.SecretLen())
 	for i := range s.shares {
 		recovered := s.shares[i].Secret()

@@ -6,17 +6,26 @@ import (
 	"github.com/dedis/crypto/protobuf"
 )
 
+// A Broadcaster is an abstraction enabling interaction with a set
+// of connections as a single object.
 type Broadcaster struct {
 	Conns []net.Conn
 }
 
-// Higher order function to handle broadcasting a type of message
-// to all peers. Take a contructor to make the messages based on
-// the id of the peer.
+// Create a new broadcaster wrapping the provided set of connections.
+func NewBroadcaster(conns []net.Conn) *Broadcaster {
+	return &Broadcaster{conns}
+}
+
+// Broadcast a message to all connections wrapped by this broadcaster.
+// Since it's possible that each connection should get a different
+// variant of the message, the function takes a constructor which it
+// then uses for creating the messages.
 func (b *Broadcaster) Broadcast(constructor func(int)interface{}) error {
 
 	for i, conn := range b.Conns {
 		if conn == nil { continue }
+
 		message := constructor(i)
 		_, err := WritePrefix(conn, protobuf.Encode(message))
 		if err != nil {
