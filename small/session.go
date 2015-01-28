@@ -347,7 +347,9 @@ func (s *SmallSession) ReceiveShareMessages() error {
 		return new(ShareMessage)
 	}, s.cons)
 
-	for pending := s.K-1; pending > 0; pending-- {
+	earlyOut := true
+	received := 1
+	for pending := s.N-1; pending > 0; pending-- {
 		msgPtr := <- results
 		message, ok := msgPtr.(*ShareMessage)
 		if message == nil || !ok {
@@ -365,23 +367,85 @@ func (s *SmallSession) ReceiveShareMessages() error {
 			return errors.New("EVERIFY")
 		}
 
+		// Blindly record the share; we'll worry about checking
+		// it for correctness later.
+		source := message.Source
+		for i, share := range message.Shares {
+			s.shares[i].SetShare(source, share)
+		}
+		received += 1
+
+		// Try to take the early out of recovering the secret
+		// from the first K shares that we get. Since we have
+		// commitments to the secrets, we'll know whether the
+		// recovered secret is correct or not. If it is, then
+		// great, we can skip the expensive checking of shares;
+		// otherwise we fall back to the slow path of checking
+		// and then discarding any shares that don't make the cut.
+		if earlyOut && received == s.K {
+			if err := s.TryRecover(); err != nil {
+				s.PruneShares()
+			} else {
+				fmt.Println("Taking the early out.")
+				break
+			}
+		}
+
 		// Now check that all shares in the vector are in
 		// line with the original commitment polynomial
 		// sent to us by the OWNER of the share in the first
 		// step of the protocol.
-		source := message.Source
-		for i, share := range message.Shares {
-			if !s.commitments[i].Check(source, share) {
-				return errors.New("ECHECK")
+		if !earlyOut || received > s.K {
+			source := message.Source
+			for i, share := range message.Shares {
+				if !s.commitments[i].Check(source, share) {
+					return errors.New("ECHECK")
+				}
+				s.shares[i].SetShare(source, share)
 			}
-			s.shares[i].SetShare(source, share)
 		}
 	}
 	return nil
 }
 
+// We call this after getting the first K shares, regardless
+// of whether the check out or not. Recovering the secret
+// blindly and then checking against the commitment should be
+// much faster than checking the shares. It can, of course,
+// fail if someone sent a bad share.
+func (s *SmallSession) TryRecover() error {
+	for i := range s.shares {
+		recovered := s.shares[i].Secret()
+		check := s.Suite.Point().Mul(nil, recovered)
+		commitment := s.commitments[i].SecretCommit()
+		if !check.Equal(commitment) {
+			return errors.New("EBAD_SECRET")
+		}
+	}
+	return nil
+}
+
+// If we tried to take the early out after the first K
+// shares but failed because someone sent a bad share,
+// then we need to go back and check all shares we got and
+// remove any bad ones, so we can successfully recover later.
+func (s *SmallSession) PruneShares() {
+	for i := range s.shares {
+		for j := 0; j < s.N; j++ {
+			share := s.shares[i].Share(j)
+			if share != nil {
+				if !s.commitments[i].Check(j, share) {
+					s.shares[i].SetShare(j, nil)
+				}
+			}
+		}
+	}
+}
+
 // XOR all the individual secrets together to produce the final
-// random value incorporating all clients' secrets.
+// random value incorporating all clients' secrets. We may panic
+// if we didn't get enough good shares, but this goes against our
+// assumptions anyway.
 func (s *SmallSession) CombineShares() (abstract.Secret, error) {
 	result := make([]byte, s.Suite.SecretLen())
 	for i := range s.shares {

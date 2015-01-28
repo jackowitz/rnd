@@ -69,7 +69,7 @@ func main() {
 
 	// Determine the context and protocol at runtime.
 	context := NewContext(suite, random, config)
-	protocol := new(ScalableProtocol)
+	protocol := new(SmallProtocol)
 
 	NewServer(context, protocol).Start()
 }
