@@ -237,16 +237,26 @@ func (s *SmallSession) ReceiveShareCommitMessages() error {
 		if message == nil || !ok {
 			return errors.New("ERECV")
 		}
+
+		// Make sure that the share is actually intended for us.
 		if message.Index != s.Mine {
 			return errors.New("ENOT_MINE")
 		}
+
+		// Verify the signature to prevent both spoofing and
+		// replay attacks.
 		signature := message.Signature
 		message.Signature = nil
+
 		data := protobuf.Encode(message)
 		err := s.Verify(data, signature, message.Source)
 		if err != nil {
 			return errors.New("EVERIFY")
 		}
+
+		// Check that the share is valid for the included commitment.
+		// Store the commitment away for checking the share vectors
+		// we get later against it later.
 		commitment := message.Commitment.(*poly.PubPoly)
 		if !commitment.Check(message.Index, message.Share) {
 			return errors.New("ECHECK")
@@ -297,13 +307,14 @@ func (s *SmallSession) ReceiveStatusMessages() error {
 		// No spoofing SUCCESS messages here!
 		signature := message.Signature
 		message.Signature = nil
+
 		data := protobuf.Encode(message)
 		err := s.Verify(data, signature, message.Source)
 		if err != nil {
 			return errors.New("EVERIFY")
 		}
 
-		// Finally make sure it's actually SUCCESS.
+		// Make sure it's actually SUCCESS.
 		if message.Status != SUCCESS {
 			return errors.New("EFAIL")
 		}
@@ -341,8 +352,10 @@ func (s *SmallSession) SendShareMessages() error {
 
 // Receive at least K (including our own) vectors of shares
 // of secrets. This is guaranteed to be enough to allow us
-// to reconstruct everyone's original input values.
+// to reconstruct everyone's original input values. See inline
+// comment for more details.
 func (s *SmallSession) ReceiveShareMessages() error {
+
 	results := s.ReadAll(func() interface{} {
 		return new(ShareMessage)
 	}, s.cons)
