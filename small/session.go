@@ -75,8 +75,10 @@ func NewSession(context *Context, nonce Nonce, replyConn net.Conn,
 
 func (s *Session) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
 
-	stopwatch := stopwatch.NewStopwatch()
+	total := stopwatch.NewStopwatch()
+	total.Start()
 
+	stopwatch := stopwatch.NewStopwatch()
 	stopwatch.Start()
 	s.GenerateInitialShares()
 	stopwatch.Stop("PickSplitCommit")
@@ -125,8 +127,9 @@ func (s *Session) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
 		panic("CombineShares: " + err.Error())
 	}
 	stopwatch.Stop("CombineShares")
+	total.Stop("Total")
 
-	return value, stopwatch
+	return value, total
 }
 
 const timeout = 3 * time.Second
@@ -185,8 +188,8 @@ func (s *Session) Start(connChan <-chan net.Conn,
 	}
 
 	if debug {
-		format := "[%d, %d] %s\n%s"
-		fmt.Printf(format, s.N, s.K, value.String(), stopwatch)
+		format := "[%d, %d] %s"
+		fmt.Printf(format, s.N, s.K, stopwatch)
 	}
 }
 
@@ -421,7 +424,6 @@ func (s *Session) ReceiveShareMessages() error {
 			if err := s.TryRecover(); err != nil {
 				s.PruneShares()
 			} else {
-				fmt.Println("Taking the early out.")
 				break
 			}
 		}

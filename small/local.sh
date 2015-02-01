@@ -14,7 +14,7 @@ function start_rnd {
     if [[ $i -eq 0 ]]; then
       args+=" -listen=7999"
     fi
-    ./$BINARY -n=$n -k=$k $args $i &> logs/server-$1.log &
+    ./$BINARY -n=$n -k=$k $args $i &> logs/server-$i.log &
   done
   echo "Started $n servers."
 }
