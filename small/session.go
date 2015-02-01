@@ -28,6 +28,7 @@ type Session struct {
 
 	shares []*poly.PriShares
 	commitments []*poly.PubPoly
+	secrets []abstract.Secret
 }
 
 // Starts a new session in the given context. The session is identified
@@ -58,6 +59,7 @@ func NewSession(context *Context, nonce Nonce, replyConn net.Conn,
 		new(poly.PubPoly),
 		make([]*poly.PriShares, context.N),
 		make([]*poly.PubPoly, context.N),
+		make([]abstract.Secret, context.N),
 	}
 
 	for i := range session.shares {
@@ -199,11 +201,13 @@ func (s *Session) GenerateInitialShares() {
 
 	s.shares[s.Mine] = s.s_i
 	s.commitments[s.Mine] = s.p_i
+	s.secrets[s.Mine] = s.r_i
 }
 
 type ShareCommitMessage struct {
 	Nonce Nonce
 	Index, Source int
+
 	Share abstract.Secret
 	Commitment interface{} // *poly.PubPoly
 	Signature []byte
@@ -282,6 +286,7 @@ const (
 type StatusMessage struct {
 	Nonce Nonce
 	Source int
+
 	Status Status
 	Signature []byte
 }
@@ -329,11 +334,13 @@ func (s *Session) ReceiveStatusMessages() error {
 
 // Contains the normal message header of Nonce and Source,
 // plus a vector of all of the shares that belong to us.
+// We also release our committed-to secret here as well.
 // Signature is over the complete contents of the message.
 type ShareMessage struct {
 	Nonce Nonce
 	Source int
 
+	Secret abstract.Secret
 	Shares []abstract.Secret
 	Signature []byte
 }
@@ -348,7 +355,7 @@ func (s *Session) SendShareMessages() error {
 	}
 
 	// Sign the message and send it out.
-	message := &ShareMessage{ s.Nonce, s.Mine, shares, nil }
+	message := &ShareMessage{ s.Nonce, s.Mine, s.r_i, shares, nil }
 	signature := s.Sign(protobuf.Encode(message))
 	message.Signature = signature
 	return s.Broadcast(func (i int) interface{} {
@@ -386,13 +393,22 @@ func (s *Session) ReceiveShareMessages() error {
 			return errors.New("EVERIFY")
 		}
 
-		// Blindly record the share; we'll worry about checking
-		// it for correctness later.
+		received += 1
 		source := message.Source
+
+		// See if the claimed secret is consistent with the
+		// commitment sent earlier. If so, great, we take it
+		// as is and save some effort on recovery later.
+		secret := message.Secret
+		if s.checkSecret(secret, s.commitments[message.Source]) {
+			s.secrets[source] = message.Secret
+		}
+
+		// Blindly record the shares; we'll worry about checking
+		// them for correctness later.
 		for i, share := range message.Shares {
 			s.shares[i].SetShare(source, share)
 		}
-		received += 1
 
 		// Try to take the early out of recovering the secret
 		// from the first K shares that we get. Since we have
@@ -415,17 +431,22 @@ func (s *Session) ReceiveShareMessages() error {
 		// sent to us by the OWNER of the share in the first
 		// step of the protocol.
 		if !earlyOut || received > s.K {
-			source := message.Source
 			for i, share := range message.Shares {
 				if !s.commitments[i].Check(source, share) {
+					s.shares[i].SetShare(source, nil)
 					return errors.New("ECHECK")
 				}
-				s.shares[i].SetShare(source, share)
 			}
 		}
 	}
 	return nil
 }
+
+func (s *Session) checkSecret(secret abstract.Secret, commitment *poly.PubPoly) bool {
+	check := s.Suite.Point().Mul(nil, secret)
+	return check.Equal(commitment.SecretCommit())
+}
+
 
 // We call this after getting the first K shares, regardless
 // of whether the check out or not. Recovering the secret
@@ -433,12 +454,20 @@ func (s *Session) ReceiveShareMessages() error {
 // much faster than checking the shares. It can, of course,
 // fail if someone sent a bad share.
 func (s *Session) TryRecover() error {
-	for i := range s.shares {
+	for i := range s.secrets {
+		// If we already got a consistent secret from the owner,
+		// then we're all set, we just use it as is.
+		if s.secrets[i] != nil {
+			continue
+		}
+		// Next, see if we can recover a consistent secret from
+		// the shares we have already. If so, we store it away
+		// for later so we don't need to do the recovery again.
 		recovered := s.shares[i].Secret()
-		check := s.Suite.Point().Mul(nil, recovered)
-		commitment := s.commitments[i].SecretCommit()
-		if !check.Equal(commitment) {
-			return errors.New("EBAD_SECRET")
+		if s.checkSecret(recovered, s.commitments[i]) {
+			s.secrets[i] = recovered
+		} else {
+			return errors.New("ERECOVER")
 		}
 	}
 	return nil

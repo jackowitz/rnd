@@ -1,10 +1,10 @@
 package broadcaster
 
 import (
-	"net"
-	"time"
 	"github.com/dedis/crypto/protobuf"
+	"net"
 	"rnd/prefix"
+	"time"
 )
 
 // A Broadcaster is an abstraction enabling interaction with a set
