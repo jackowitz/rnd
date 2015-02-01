@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"flag"
+	"fmt"
+	"os"
 	"reflect"
 	"strconv"
 	"github.com/dedis/crypto/abstract"
@@ -22,7 +25,34 @@ var tPoint = reflect.TypeOf(&aPoint).Elem()
 var aNonce Nonce
 var tNonce = reflect.TypeOf(&aNonce).Elem()
 
+func localHosts(n int) []string {
+	hosts := make([]string, n)
+	for i := range hosts {
+		hosts[i] = fmt.Sprintf("localhost:%d", 8080+i)
+	}
+	return hosts
+}
+
+func loadHostsFile(path string, n int) ([]string, error) {
+	hosts := make([]string, n)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	reader := bufio.NewReader(file)
+	for i := range hosts {
+		host, _, err := reader.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+		hosts[i] = string(host)
+	}
+	return hosts, nil
+}
+
 func main() {
+	listen := flag.Int("listen", -1, "accept request port")
+	hosts := flag.String("hosts", "", "hosts file")
 	n := flag.Int("n", 3, "number of servers")
 	k := flag.Int("k", 3, "share threshold")
 	flag.Parse()
@@ -40,14 +70,18 @@ func main() {
 
 	// Use a local setup for now.
 	contextRandom := suite.Cipher([]byte("test"))
-	config := NewLocalPeerConfig(suite, contextRandom, id, *n, *k)
+	var hostlist []string
+	if *hosts != "" {
+		hostlist, err = loadHostsFile(*hosts, *n)
+		if err != nil {
+			panic("loadHostsFile: " + err.Error())
+		}
+	} else {
+		hostlist = localHosts(*n)
+	}
+	config := NewPeerConfig(suite, contextRandom, id, *n, *k, hostlist)
 
 	// Determine the context and protocol at runtime.
 	context := NewContext(suite, random, config)
-
-	requestsPort := 0
-	if id == 0 {
-		requestsPort = 7999
-	}
-	NewServer().Start(context, requestsPort)
+	NewServer().Start(context, *listen)
 }

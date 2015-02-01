@@ -10,11 +10,11 @@ function start_rnd {
   k=$2
   go build -o $BINARY rnd/small
   for i in `seq 0 $(($n - 1))`; do
-    #if [[ $i -eq 0 ]]; then
-      ./$BINARY -n=$n -k=$k $i &> logs/server$i.log &
-    #else
-    #  ./$BINARY -n=$n -k=$k $i &> /dev/null &
-    #fi
+    args="-hosts=hosts.conf"
+    if [[ $i -eq 0 ]]; then
+      args+=" -listen=7999"
+    fi
+    ./$BINARY -n=$n -k=$k $args $i &> logs/server-$1.log &
   done
   echo "Started $n servers."
 }

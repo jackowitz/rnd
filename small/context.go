@@ -2,9 +2,6 @@ package main
 
 import (
 	"crypto/cipher"
-	"encoding/json"
-	"fmt"
-	"os"
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/anon"
 )
@@ -30,36 +27,14 @@ func (p *PeerConfig) Self() *Peer {
 	return &p.Peers[p.Mine]
 }
 
-func (p *PeerConfig) Save(path string) error {
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	encoder := json.NewEncoder(file)
-	return encoder.Encode(p)
-}
-
-func (p *PeerConfig) FromFile(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(file)
-	return decoder.Decode(p)
-}
-
-// Generate a new configuration for running locally.
-func NewLocalPeerConfig(suite abstract.Suite,
-		random cipher.Stream, mine, n, k int) *PeerConfig {
+func NewPeerConfig(suite abstract.Suite, random cipher.Stream,
+		mine, n, k int, hosts []string) *PeerConfig {
 
 	peers := make([]Peer, n)
 	for i := range peers {
-		addr := fmt.Sprintf("localhost:%d", 8080 + i)
-
 		x := suite.Secret().Pick(random)
 		X := suite.Point().Mul(nil, x)
-
-		peers[i] = Peer{ i, addr, x, X }
+		peers[i] = Peer{ i, hosts[i], x, X }
 	}
 	return &PeerConfig{ peers, mine, n, k }
 }
@@ -71,8 +46,8 @@ type Context struct {
 	*PeerConfig
 }
 
-func NewContext(suite abstract.Suite,
-		random cipher.Stream, config *PeerConfig) *Context {
+func NewContext(suite abstract.Suite, random cipher.Stream,
+		config *PeerConfig) *Context {
 
 	return &Context{ suite, random, config}
 }
