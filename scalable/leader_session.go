@@ -4,35 +4,50 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 	"github.com/dedis/crypto/abstract"
-	"github.com/dedis/crypto/protobuf"
+	"rnd/broadcaster"
+	"rnd/prefix"
 )
 
-type ScalableLeaderSession struct {
-	*ScalableSessionBase
+type LeaderSession struct {
+	*SessionBase
 
-	*Broadcaster
+	*broadcaster.Broadcaster
 }
 
-func NewScalableLeaderSession(context *Context, nonce Nonce,
-		replyConn net.Conn, done chan<- Nonce) chan <-net.Conn {
+func NewLeaderSession(context *Context, nonce Nonce) {
 
-	broadcaster := &Broadcaster {
+	broadcaster := &broadcaster.Broadcaster {
 		make([]net.Conn, context.N),
 	}
 
-	scalable := &ScalableLeaderSession {
-		NewScalableSessionBase(context, nonce),
+	session := &LeaderSession {
+		NewSessionBase(context, nonce),
 		broadcaster,
 	}
 
+	server, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
 	incoming := make(chan net.Conn, context.N)
-	go scalable.Start(incoming, replyConn, done)
+	go func() {
+		for {
+			conn, err := server.Accept()
+			if err != nil {
+				continue
+			}
+			incoming <- conn
+		}
+	}()
 
-	return incoming
+	session.Start(incoming, replyConn, done)
 }
 
-func (s *ScalableLeaderSession) Start(connChan <-chan net.Conn,
+var timeout = 3 * time.Second
+
+func (s *LeaderSession) Start(connChan <-chan net.Conn,
 		replyConn net.Conn, close chan<- Nonce) {
 
 	// Store connection channel away for later.
@@ -48,8 +63,8 @@ func (s *ScalableLeaderSession) Start(connChan <-chan net.Conn,
 			format := "Unable to connect to server at %s"
 			panic(fmt.Sprintf(format, s.Peers[i].Addr))
 		}
-		buf := protobuf.Encode(&NonceMessage{ s.Nonce })
-		if _, err := WritePrefix(conn, buf); err != nil {
+		buf := s.Nonce.Encode()
+		if _, err := prefix.WritePrefix(conn, buf); err != nil {
 			panic("announcement: " + err.Error())
 		}
 		s.Conns[i] = conn
@@ -58,7 +73,7 @@ func (s *ScalableLeaderSession) Start(connChan <-chan net.Conn,
 	s.RunLottery()
 }
 
-func (s *ScalableLeaderSession) GenerateInitialShares() {
+func (s *LeaderSession) GenerateInitialShares() {
 	s.s_i.Pick(s.Random)
 	s.C_i.Mul(nil, s.s_i)
 
@@ -67,7 +82,7 @@ func (s *ScalableLeaderSession) GenerateInitialShares() {
 	s.C_i_p = h.Sum(nil)
 }
 
-func (s *ScalableLeaderSession) ReceiveHashCommits() error {
+func (s *LeaderSession) ReceiveHashCommits() error {
 	results := s.ReadAll(func()interface{} {
 		return new(HashCommitMessage)
 	}, s.cons)
@@ -87,14 +102,14 @@ type HashCommitVectorMessage struct {
 	Commits [][]byte
 }
 
-func (s *ScalableLeaderSession) SendHashCommitVector() error {
+func (s *LeaderSession) SendHashCommitVector() error {
 	message := &HashCommitVectorMessage { s.V_C_p }
 	return s.Broadcast(func(i int)interface{} {
 		return message
 	})
 }
 
-func (s *ScalableLeaderSession) ReceiveSignatureVectors() error {
+func (s *LeaderSession) ReceiveSignatureVectors() error {
 	fmt.Println("Waiting for signature vectors...")
 	results := s.ReadAll(func()interface{} {
 		return new(SignatureVectorMessage)
@@ -120,7 +135,7 @@ type SignatureVectorVectorMessage struct {
 	Signatures []*SignatureVectorMessage
 }
 
-func (s *ScalableLeaderSession) SendSignatureVectorVector() error {
+func (s *LeaderSession) SendSignatureVectorVector() error {
 	message := &SignatureVectorVectorMessage {
 		s.signatureVector,
 	}
@@ -130,7 +145,7 @@ func (s *ScalableLeaderSession) SendSignatureVectorVector() error {
 	})
 }
 
-func (s *ScalableLeaderSession) ReceiveSecrets() error {
+func (s *LeaderSession) ReceiveSecrets() error {
 	results := s.ReadAll(func()interface{} {
 		return new(SecretMessage)
 	}, s.cons)
@@ -153,7 +168,7 @@ type SecretVectorMessage struct {
 	Secrets []abstract.Secret
 }
 
-func (s *ScalableLeaderSession) SendSecretVector() error {
+func (s *LeaderSession) SendSecretVector() error {
 	message := &SecretVectorMessage{
 		s.secretVector,
 	}
@@ -163,7 +178,7 @@ func (s *ScalableLeaderSession) SendSecretVector() error {
 	})
 }
 
-func (s *ScalableLeaderSession) RunLottery() {
+func (s *LeaderSession) RunLottery() {
 	s.GenerateInitialShares()
 	s.V_C_p[s.Mine] = s.C_i_p
 
