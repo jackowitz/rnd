@@ -205,7 +205,7 @@ type ShareCommitMessage struct {
 	Nonce Nonce
 	Index, Source int
 	Share abstract.Secret
-	Commitment interface{} // poly.PubPoly
+	Commitment interface{} // *poly.PubPoly
 	Signature []byte
 }
 
@@ -259,7 +259,10 @@ func (s *Session) ReceiveShareCommitMessages() error {
 		// Check that the share is valid for the included commitment.
 		// Store the commitment away for checking the share vectors
 		// we get later against it later.
-		commitment := message.Commitment.(*poly.PubPoly)
+		commitment, ok := message.Commitment.(*poly.PubPoly)
+		if commitment == nil || !ok {
+			return errors.New("ECONVERT")
+		}
 		if !commitment.Check(message.Index, message.Share) {
 			return errors.New("ECHECK")
 		}
