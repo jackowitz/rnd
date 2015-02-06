@@ -8,7 +8,7 @@ import (
 	"time"
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/poly"
-	"github.com/dedis/crypto/protobuf"
+	"github.com/dedis/protobuf"
 	"rnd/broadcaster"
 	"rnd/prefix"
 	"rnd/stopwatch"
@@ -213,14 +213,18 @@ type ShareCommitMessage struct {
 
 	Share abstract.Secret
 	Commitment interface{} // *poly.PubPoly
-	Signature []byte
+	Signature []byte `protobuf:"opt"`
 }
 
 func (s *Session) SendShareCommitMessages() error {
 	return s.Broadcast(func (i int) interface{} {
 		message := &ShareCommitMessage{ s.Nonce, i,
 				s.Mine, s.s_i.Share(i), s.p_i, nil }
-		signature := s.Sign(protobuf.Encode(message))
+		data, err := protobuf.Encode(message)
+		if err != nil {
+			return errors.New("ESIGN")
+		}
+		signature := s.Sign(data)
 		message.Signature = signature
 		return message
 	})
@@ -257,8 +261,11 @@ func (s *Session) ReceiveShareCommitMessages() error {
 		signature := message.Signature
 		message.Signature = nil
 
-		data := protobuf.Encode(message)
-		err := s.Verify(data, signature, message.Source)
+		data, err := protobuf.Encode(message)
+		if err != nil {
+			return errors.New("ERESIGN")
+		}
+		err = s.Verify(data, signature, message.Source)
 		if err != nil {
 			return errors.New("EVERIFY")
 		}
@@ -291,12 +298,13 @@ type StatusMessage struct {
 	Source int
 
 	Status Status
-	Signature []byte
+	Signature []byte `protobuf:"opt"`
 }
 
 func (s *Session) SendStatusMessages(status Status) error {
 	message := &StatusMessage{ s.Nonce, s.Mine, status, nil }
-	signature := s.Sign(protobuf.Encode(message))
+	data, _ := protobuf.Encode(message)
+	signature := s.Sign(data)
 	message.Signature = signature
 	return s.Broadcast(func (i int) interface{} {
 		return message
@@ -321,7 +329,7 @@ func (s *Session) ReceiveStatusMessages() error {
 		signature := message.Signature
 		message.Signature = nil
 
-		data := protobuf.Encode(message)
+		data, _ := protobuf.Encode(message)
 		err := s.Verify(data, signature, message.Source)
 		if err != nil {
 			return errors.New("EVERIFY")
@@ -345,7 +353,7 @@ type ShareMessage struct {
 
 	Secret abstract.Secret
 	Shares []abstract.Secret
-	Signature []byte
+	Signature []byte `protobuf:"opt"`
 }
 
 func (s *Session) SendShareMessages() error {
@@ -359,7 +367,8 @@ func (s *Session) SendShareMessages() error {
 
 	// Sign the message and send it out.
 	message := &ShareMessage{ s.Nonce, s.Mine, s.r_i, shares, nil }
-	signature := s.Sign(protobuf.Encode(message))
+	data, _ := protobuf.Encode(message)
+	signature := s.Sign(data)
 	message.Signature = signature
 	return s.Broadcast(func (i int) interface{} {
 		return message
@@ -390,7 +399,7 @@ func (s *Session) ReceiveShareMessages() error {
 		signature := message.Signature
 		message.Signature = nil
 
-		data := protobuf.Encode(message)
+		data, _ := protobuf.Encode(message)
 		err := s.Verify(data, signature, message.Source)
 		if err != nil {
 			return errors.New("EVERIFY")

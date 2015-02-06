@@ -1,7 +1,8 @@
 package broadcaster
 
 import (
-	"github.com/dedis/crypto/protobuf"
+	"fmt"
+	"github.com/dedis/protobuf"
 	"net"
 	"rnd/prefix"
 	"time"
@@ -28,7 +29,8 @@ func (b *Broadcaster) Broadcast(constructor func(int)interface{}) error {
 		if conn == nil { continue }
 
 		message := constructor(i)
-		_, err := prefix.WritePrefix(conn, protobuf.Encode(message))
+		data, _ := protobuf.Encode(message)
+		_, err := prefix.WritePrefix(conn, data)
 		if err != nil {
 			return err
 		}
@@ -52,7 +54,7 @@ func ReadOneTimeout(conn net.Conn, structPtr interface{},
 	if err != nil {
 		return err
 	}
-	err = protobuf.Decode(raw, structPtr, cons)
+	err = protobuf.DecodeWithConstructors(raw, structPtr, cons)
 	if err != nil {
 		return err
 	}
@@ -72,6 +74,7 @@ func (b *Broadcaster) ReadAll(constructor func()interface{},
 		message := constructor()
 		go func(conn net.Conn, message interface{}) {
 			if err := ReadOne(conn, message, cons); err != nil {
+				fmt.Println("ReadOne: " + err.Error())
 				results <- nil
 			} else {
 				results <- message
