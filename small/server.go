@@ -60,7 +60,7 @@ func (s *Server) HandleConnection(conn net.Conn,
 		return err
 	}
 	nonce := s.NewNonce()
-	if err := nonce.Decode(buf); err != nil {
+	if err := nonce.UnmarshalBinary(buf); err != nil {
 		return err
 	}
 

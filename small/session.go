@@ -73,7 +73,7 @@ func NewSession(context *Context, nonce Nonce, replyConn net.Conn,
 	return incoming
 }
 
-func (s *Session) GenerateRandom() (abstract.Secret, *stopwatch.Stopwatch) {
+func (s *Session) GenerateRandom() ([]byte, *stopwatch.Stopwatch) {
 
 	total := stopwatch.NewStopwatch()
 	total.Start()
@@ -145,7 +145,7 @@ func (s *Session) Start(connChan <-chan net.Conn,
 			panic(fmt.Sprintf(format, s.Peers[i].Addr))
 		}
 		// Send the session Nonce.
-		buf := s.Nonce.Encode()
+		buf, _ := s.Nonce.MarshalBinary()
 		if _, err := prefix.WritePrefix(conn, buf); err != nil {
 			panic("Writing Nonce: " + err.Error())
 		}
@@ -179,7 +179,7 @@ func (s *Session) Start(connChan <-chan net.Conn,
 
 	// Send value back to the requester.
 	if replyConn != nil {
-		if _, err := replyConn.Write(value.Encode()); err != nil {
+		if _, err := replyConn.Write(value); err != nil {
 			panic("Writing Reply: " + err.Error())
 		}
 		if err := replyConn.Close(); err != nil {
@@ -505,18 +505,14 @@ func (s *Session) PruneShares() {
 // random value incorporating all clients' secrets. We may panic
 // if we didn't get enough good shares, but this goes against our
 // assumptions anyway.
-func (s *Session) CombineShares() (abstract.Secret, error) {
+func (s *Session) CombineShares() ([]byte, error) {
 	result := make([]byte, s.Suite.SecretLen())
 	for i := range s.shares {
 		recovered := s.shares[i].Secret()
-		bytes := recovered.Encode()
+		bytes, _ := recovered.MarshalBinary()
 		for i := 0; i < s.Suite.SecretLen(); i++ {
 			result[i] ^= bytes[i]
 		}
 	}
-	value := s.Suite.Secret()
-	if err := value.Decode(result); err != nil {
-		return nil, err
-	}
-	return value, nil
+	return result, nil
 }
