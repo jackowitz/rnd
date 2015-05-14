@@ -9,9 +9,10 @@ import (
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/poly"
 	"github.com/dedis/protobuf"
+	"github.com/jackowitzd2/stopwatch"
+	"reflect"
 	"rnd/broadcaster"
 	"rnd/prefix"
-	"rnd/stopwatch"
 )
 
 type Session struct {
@@ -42,11 +43,19 @@ func NewSession(context *Context, nonce Nonce, replyConn net.Conn,
 	conns := make([]net.Conn, context.N)
 	broadcaster := broadcaster.NewBroadcaster(conns)
 
-	cons := protobuf.Constructors{
-		tSecret: func()interface{} { return context.Suite.Secret() },
-		tNonce: func()interface{} { return context.Suite.Secret() },
-		tPoint: func()interface{} { return context.Suite.Point() },
-	}
+	var cons protobuf.Constructors =
+		func(t reflect.Type) interface{} {
+			switch t {
+			case tSecret:
+				return context.Suite.Secret()
+			case tNonce:
+				return context.Suite.Secret()
+			case tPoint:
+				return context.Suite.Point()
+			default:
+				return nil
+			}
+		}
 
 	session := &Session{
 		context,
@@ -188,7 +197,7 @@ func (s *Session) Start(connChan <-chan net.Conn,
 	}
 
 	if debug {
-		format := "[%d, %d] %s"
+		format := "[%d, %d] %s\n"
 		fmt.Printf(format, s.N, s.K, stopwatch)
 	}
 }
