@@ -54,7 +54,7 @@ func ReadOneTimeout(conn net.Conn, structPtr interface{},
 	if err != nil {
 		return err
 	}
-	err = protobuf.DecodeWithConstructors(raw, structPtr, cons)
+	err = protobuf.Decode(raw, structPtr, cons)
 	if err != nil {
 		return err
 	}
