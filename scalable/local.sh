@@ -9,7 +9,7 @@ function start_rnd {
   n=$1
   k=$2
   go build -o $BINARY rnd/scalable
-  for i in `seq 0 $(($n - 1))`; do
+  for i in `seq $(($n - 1)) -1 0`; do
     args="-hosts=hosts.conf"
     if [[ $i -eq 0 ]]; then
       args+=" -listen=7999"
