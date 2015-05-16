@@ -39,15 +39,15 @@ func main() {
 	random := random.Stream
 
 	// Use a local setup for now.
-	contextRandom := abstract.HashStream(suite, []byte("test"), nil)
+	contextRandom := suite.Cipher([]byte("test"))
 	config := NewLocalPeerConfig(suite, contextRandom, id, *n, *k)
 
 	// Determine the context and protocol at runtime.
 	context := NewContext(suite, random, config)
 
 	if id == 0 {
-		NewLeaderSession().Start()
+		NewLeaderSession(context)
 	} else {
-		NewSession().Start()
+		NewSession(context)
 	}
 }

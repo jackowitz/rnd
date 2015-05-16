@@ -9,7 +9,8 @@ import (
 	"time"
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/poly"
-	"github.com/dedis/crypto/protobuf"
+	"github.com/dedis/protobuf"
+	"reflect"
 	"rnd/broadcaster"
 	"rnd/prefix"
 )
@@ -19,15 +20,23 @@ type SessionBase struct {
 	*Context
 	cons protobuf.Constructors
 
+	// The nonce identifying this session.
 	Nonce Nonce
+
+	// Channel for receiving incoming connections; used
+	// for both the session initiation by the leader and
+	// for trustee requests later in the protocol.
 	ConnChan <-chan net.Conn
 
-	// First round commits.
-	s_i abstract.Secret
-	C_i abstract.Point
-	C_i_p []byte
-	V_C_p [][]byte
+	// Protocol Step 1:
+	s_i abstract.Secret		// The secret.
+	C_i abstract.Point		// The commitment to the secret.
+	C_i_p []byte			// The outer commitment.
 
+	// Protocol Step 2 & 3:
+	V_C_p [][]byte			// Vector of outer commitments.
+
+	// Protocol Step 4:
 	a_i *poly.PriPoly
 	sh_i *poly.PriShares
 	p_i *poly.PubPoly
@@ -43,18 +52,27 @@ type SessionBase struct {
 	secretVector []abstract.Secret
 }
 
-func NewSessionBase(context *Context,
-		nonce Nonce) *SessionBase {
+func NewSessionBase(context *Context) *SessionBase {
 
-	cons := protobuf.Constructors {
-		tSecret: func()interface{} { return context.Suite.Secret() },
-		tNonce: func()interface{} { return context.Suite.Secret() },
-		tPoint: func()interface{} { return context.Suite.Point() },
-	}
+	// Constructors for use with protobuf stuff.
+	var cons protobuf.Constructors =
+		func(t reflect.Type) interface{} {
+			switch t {
+			case tSecret:
+				return context.Suite.Secret()
+			case tNonce:
+				return context.Suite.Secret()
+			case tPoint:
+				return context.Suite.Point()
+			default:
+				return nil
+			}
+		}
+
 	return &SessionBase {
 		context,
 		cons,
-		nonce,
+		nil,
 		nil,
 		context.Suite.Secret(),
 		context.Suite.Point(),
@@ -70,12 +88,19 @@ func NewSessionBase(context *Context,
 	}
 }
 
+// Generates all of the values we need for Step 1, namely
+// the secret and the inner and outer commitments.
 func (s *SessionBase) GenerateInitialShares() {
+	// The secret.
 	s.s_i.Pick(s.Random)
+
+	// Inner commitment.
 	s.C_i.Mul(nil, s.s_i)
 
+	// Outer commitment.
 	h := s.Suite.Hash()
-	h.Write(s.C_i.Encode())
+	buf, _ := s.C_i.MarshalBinary()
+	h.Write(buf)
 	s.C_i_p = h.Sum(nil)
 }
 
@@ -104,11 +129,12 @@ func (s *SessionBase) DoTrusteeExchange(i,
 		return nil, err
 	}
 
+	/*
 	// send session nonce
-	buf := s.Nonce.Encode()
+	buf, _ := s.Nonce.MarshalBinary()
 	if _, err := prefix.WritePrefix(conn, buf); err != nil {
 		return nil, err
-	}
+	}*/
 
 	// send share to trustee
 	message := &TrusteeShareMessage{
@@ -116,7 +142,8 @@ func (s *SessionBase) DoTrusteeExchange(i,
 		s.sh_i.Share(i),
 		s.p_i,
 	}
-	_, err = prefix.WritePrefix(conn, protobuf.Encode(message))
+	buf, _ := protobuf.Encode(message)
+	_, err = prefix.WritePrefix(conn, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -137,14 +164,12 @@ func (s *SessionBase) SendTrusteeShares(R int) error {
 	for _, C_p := range s.V_C_p {
 		h.Write(C_p)
 	}
-	h.Write(s.C_i.Encode())
+	cib, _ := s.C_i.MarshalBinary()
+	h.Write(cib)
 	seedBytes := h.Sum(nil)
 
 	// Convoluted mechanism here... all we're trying to do is
-	// pick R out of N elements; Go doesn't make it easy!
-	// XXX paper says hash functions, but then we can end up
-	// with single trustees getting multiple of our shares;
-	// is that desirable or undesirable?
+	// pick R out of N elements!
 	var seed int64
 	buf := bytes.NewBuffer(seedBytes[:8])
 	binary.Read(buf, binary.LittleEndian, &seed)
@@ -201,6 +226,7 @@ Listen:
 
 				err := broadcaster.ReadOne(conn, message, nil)
 				if err != nil {
+					fmt.Println(err.Error())
 					results <- nil
 					return
 				}
@@ -209,7 +235,8 @@ Listen:
 				reply := &TrusteeSignatureMessage {
 					s.Mine, message.Source, message.Index,
 				}
-				_, err = prefix.WritePrefix(conn, protobuf.Encode(reply))
+				buf, _ := protobuf.Encode(reply)
+				_, err = prefix.WritePrefix(conn, buf)
 				if err != nil {
 					results <- nil
 					return

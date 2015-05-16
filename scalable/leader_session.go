@@ -16,20 +16,20 @@ type LeaderSession struct {
 	*broadcaster.Broadcaster
 }
 
-func NewLeaderSession(context *Context, nonce Nonce) {
+func NewLeaderSession(context *Context) {
 
 	broadcaster := &broadcaster.Broadcaster {
 		make([]net.Conn, context.N),
 	}
 
 	session := &LeaderSession {
-		NewSessionBase(context, nonce),
+		NewSessionBase(context),
 		broadcaster,
 	}
 
-	server, err := net.Listen("tcp", addr)
+	server, err := net.Listen("tcp", context.Self().Addr)
 	if err != nil {
-		return nil, err
+		panic("Listen: " + err.Error())
 	}
 	incoming := make(chan net.Conn, context.N)
 	go func() {
@@ -41,19 +41,22 @@ func NewLeaderSession(context *Context, nonce Nonce) {
 			incoming <- conn
 		}
 	}()
-
-	session.Start(incoming, replyConn, done)
+	session.Start(incoming)
 }
 
 var timeout = 3 * time.Second
 
-func (s *LeaderSession) Start(connChan <-chan net.Conn,
-		replyConn net.Conn, close chan<- Nonce) {
+func (s *LeaderSession) Start(connChan <-chan net.Conn) {
 
 	// Store connection channel away for later.
 	s.ConnChan = connChan
 
-	// Leader connects to everybody else.
+	// Generate a nonce for the session.
+	s.Nonce = s.Suite.Secret()
+	s.Nonce.Pick(s.Random)
+
+	// Leader connects to everybody else and announces
+	// the sesion using the nonce.
 	for i := 0; i < s.N; i++ {
 		if s.IsMine(i) {
 			continue
@@ -63,23 +66,16 @@ func (s *LeaderSession) Start(connChan <-chan net.Conn,
 			format := "Unable to connect to server at %s"
 			panic(fmt.Sprintf(format, s.Peers[i].Addr))
 		}
-		buf := s.Nonce.Encode()
+		buf, _ := s.Nonce.MarshalBinary()
 		if _, err := prefix.WritePrefix(conn, buf); err != nil {
-			panic("announcement: " + err.Error())
+			panic("Sending announcement: " + err.Error())
 		}
 		s.Conns[i] = conn
 	}
+
+	// Start running the lottery protocol.
 	fmt.Println("Started Leader " + s.Nonce.String())
 	s.RunLottery()
-}
-
-func (s *LeaderSession) GenerateInitialShares() {
-	s.s_i.Pick(s.Random)
-	s.C_i.Mul(nil, s.s_i)
-
-	h := s.Suite.Hash()
-	h.Write(s.C_i.Encode())
-	s.C_i_p = h.Sum(nil)
 }
 
 func (s *LeaderSession) ReceiveHashCommits() error {
@@ -95,6 +91,7 @@ func (s *LeaderSession) ReceiveHashCommits() error {
 		}
 		s.V_C_p[message.Source] = message.Commit
 	}
+	fmt.Println("Got all HashCommits.")
 	return nil
 }
 
@@ -104,6 +101,7 @@ type HashCommitVectorMessage struct {
 
 func (s *LeaderSession) SendHashCommitVector() error {
 	message := &HashCommitVectorMessage { s.V_C_p }
+	fmt.Println("Sent HashCommitVector.")
 	return s.Broadcast(func(i int)interface{} {
 		return message
 	})
@@ -127,7 +125,7 @@ func (s *LeaderSession) ReceiveSignatureVectors() error {
 		}
 		s.signatureVector[message.Source] = message
 	}
-	fmt.Println("Got all signature vectors.")
+	fmt.Println("Got all SignatureVectors.")
 	return nil
 }
 
@@ -139,7 +137,7 @@ func (s *LeaderSession) SendSignatureVectorVector() error {
 	message := &SignatureVectorVectorMessage {
 		s.signatureVector,
 	}
-	fmt.Println("Sent signature vector vector.")
+	fmt.Println("Sent SignatureVectorVector.")
 	return s.Broadcast(func(i int)interface{} {
 		return message
 	})
@@ -160,7 +158,7 @@ func (s *LeaderSession) ReceiveSecrets() error {
 		}
 		s.secretVector[message.Source] = message.Secret
 	}
-	fmt.Println("Got all secrets.")
+	fmt.Println("Got all Secrets.")
 	return nil
 }
 
@@ -172,7 +170,7 @@ func (s *LeaderSession) SendSecretVector() error {
 	message := &SecretVectorMessage{
 		s.secretVector,
 	}
-	fmt.Println("Sent secret vector.")
+	fmt.Println("Sent SecretVector.")
 	return s.Broadcast(func(i int)interface{} {
 		return message
 	})

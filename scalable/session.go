@@ -5,28 +5,29 @@ import (
 	"fmt"
 	"net"
 	"github.com/dedis/crypto/abstract"
-	"github.com/dedis/crypto/protobuf"
+	"github.com/dedis/protobuf"
 	"rnd/broadcaster"
 	"rnd/prefix"
 )
 
-// Specific to just the others.
+// Functionality specific to sessions run on all servers
+// other than the leader.
 type Session struct {
 	*SessionBase
 
 	Conn net.Conn
 }
 
-func NewSession(context *Context, nonce Nonce) {
+func NewSession(context *Context) {
 
 	scalable := &Session {
-		NewSessionBase(context, nonce),
+		NewSessionBase(context),
 		nil,
 	}
 
-	server, err := net.Listen("tcp", addr)
+	server, err := net.Listen("tcp", context.Self().Addr)
 	if err != nil {
-		return nil, err
+		panic("Listen: " + err.Error())
 	}
 	incoming := make(chan net.Conn, context.N)
 	go func() {
@@ -38,51 +39,66 @@ func NewSession(context *Context, nonce Nonce) {
 			incoming <- conn
 		}
 	}()
-
-	scalable.Start(incoming, replyConn, done)
+	scalable.Start(incoming)
 }
 
-func (s *Session) Start(connChan <-chan net.Conn,
-		replyConn net.Conn, close chan<- Nonce) {
-
-	// Store connection channel away for later.
-	s.ConnChan = connChan
+func (s *Session) Start(connChan <-chan net.Conn) {
 
 	// Get our connection to the leader.
 	s.Conn = <- connChan
+	buf, err := prefix.ReadPrefix(s.Conn)
+	if err != nil {
+		panic("Reading Nonce: " + err.Error())
+	}
+	s.Nonce = s.Suite.Secret()
+	if err = s.Nonce.UnmarshalBinary(buf); err != nil {
+		panic("Decoding Nonce: " + err.Error())
+	}
 
+	// Keep a reference to the channel for accepting
+	// requests later as a trustee.
+	s.ConnChan = connChan
+
+	// Start running the lottery protocol.
 	fmt.Println("Started " + s.Nonce.String())
 	s.RunLottery()
 }
 
+// The outer commitment to the secret.
 type HashCommitMessage struct {
 	Source int
 	Commit []byte
 }
 
+// Send the outer commitment to the leader.
 func (s *Session) SendHashCommit() error {
-	message := protobuf.Encode(&HashCommitMessage{ s.Mine, s.C_i_p })
+	message, _ := protobuf.Encode(&HashCommitMessage{ s.Mine, s.C_i_p })
 	_, err := prefix.WritePrefix(s.Conn, message)
+	fmt.Println("Sent hash commit.")
 	return err
 }
 
+// Receive the vector of outer commitments from the leader.
 func (s *Session) ReceiveHashCommitVector() error {
 	message := new(HashCommitVectorMessage)
 	if err := broadcaster.ReadOne(s.Conn, message, nil); err != nil {
 		return err
 	}
 	s.V_C_p = message.Commits
+	fmt.Println("Got HashCommitVector.")
 	return nil
 }
 
+// The vector of signatures from trustees.
 type SignatureVectorMessage struct {
 	Source int
 	Commit abstract.Point
 	Signatures []*TrusteeSignatureMessage
 }
 
+// Send our vector of signatures to the leader.
 func (s *Session) SendSignatureVector() error {
-	message := protobuf.Encode(&SignatureVectorMessage{
+	message,_ := protobuf.Encode(&SignatureVectorMessage{
 		s.Mine, s.C_i, s.signatures,
 	})
 	_, err := prefix.WritePrefix(s.Conn, message)
@@ -90,6 +106,7 @@ func (s *Session) SendSignatureVector() error {
 	return err
 }
 
+// Receive the vector of signature vectors from the leader.
 func (s *Session) ReceiveSignatureVectorVector() error {
 	message := new(SignatureVectorVectorMessage)
 	if err := broadcaster.ReadOne(s.Conn, message, s.cons); err != nil {
@@ -100,13 +117,15 @@ func (s *Session) ReceiveSignatureVectorVector() error {
 	return nil
 }
 
+// The opened inner commitment - i.e. the secret.
 type SecretMessage struct {
 	Source int
 	Secret abstract.Secret
 }
 
+// Send our secret to the leader.
 func (s *Session) SendSecret() error {
-	message := protobuf.Encode(&SecretMessage{
+	message, _ := protobuf.Encode(&SecretMessage{
 		s.Mine, s.s_i,
 	})
 	_, err := prefix.WritePrefix(s.Conn, message)
@@ -114,24 +133,29 @@ func (s *Session) SendSecret() error {
 	return err
 }
 
+// Receive the vector of secrets from the leader.
 func (s *Session) ReceiveSecretVector() error {
 	message := new(SecretVectorMessage)
 	if err := broadcaster.ReadOne(s.Conn, message, s.cons); err != nil {
 		return err
 	}
 	s.secretVector = message.Secrets
-	fmt.Println("Got secret vector.")
+	fmt.Println("Got SecretVector.")
 	return nil
 }
 
+// Perform local calculations needed to determine the
+// "winning" lottery tickets.
 func (s *SessionBase) CalculateTickets() error {
 	for i := 0; i < s.N; i++ {
 		h := s.Suite.Hash()
 		for _, sig := range s.signatureVector {
-			h.Write(protobuf.Encode(sig))
+			buf, _ := protobuf.Encode(sig)
+			h.Write(buf)
 		}
 		for _, secret := range s.secretVector {
-			h.Write(secret.Encode())
+			buf, _ := secret.MarshalBinary()
+			h.Write(buf)
 		}
 		buf := make([]byte, h.Size())
 		binary.PutVarint(buf, int64(i))
