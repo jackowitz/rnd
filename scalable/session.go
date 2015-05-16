@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
 	"net"
 	"github.com/dedis/crypto/abstract"
@@ -141,28 +140,6 @@ func (s *Session) ReceiveSecretVector() error {
 	}
 	s.secretVector = message.Secrets
 	fmt.Println("Got SecretVector.")
-	return nil
-}
-
-// Perform local calculations needed to determine the
-// "winning" lottery tickets.
-func (s *SessionBase) CalculateTickets() error {
-	for i := 0; i < s.N; i++ {
-		h := s.Suite.Hash()
-		for _, sig := range s.signatureVector {
-			buf, _ := protobuf.Encode(sig)
-			h.Write(buf)
-		}
-		for _, secret := range s.secretVector {
-			buf, _ := secret.MarshalBinary()
-			h.Write(buf)
-		}
-		buf := make([]byte, h.Size())
-		binary.PutVarint(buf, int64(i))
-		h.Write(buf)
-		ticket := h.Sum(nil)
-		fmt.Printf("%d: %s\n", i, string(ticket))
-	}
 	return nil
 }
 
