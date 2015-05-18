@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -29,28 +30,24 @@ type SessionBase struct {
 	// for trustee requests later in the protocol.
 	ConnChan <-chan net.Conn
 
-	// Protocol Step 1:
 	s_i abstract.Secret		// The secret.
 	C_i abstract.Point		// The commitment to the secret.
 	C_i_p []byte			// The outer commitment.
 
-	// Protocol Step 2 & 3:
 	V_C_p [][]byte			// Vector of outer commitments.
 
-	// Protocol Step 4:
-	a_i *poly.PriPoly
-	sh_i *poly.PriShares
-	p_i *poly.PubPoly
+	a_i *poly.PriPoly		// Polynomial encoding the secret.
+	sh_i *poly.PriShares	// Shares of the polynomial for trustees.
+	p_i *poly.PubPoly		// Commitment to the polynomial.
 
-	// second round trustee stuff
-	shares map[uint32]abstract.Secret
-	signatures []*TrusteeSignatureMessage
+	shares map[uint32]abstract.Secret		// Share's we're holding.
+	signatures []*TrusteeSignatureMessage	// Signatures of trustees that
+											// are holding our shares.
 
-	// third round reporting of signatures
-	signatureVector []*SignatureVectorMessage
+	signatureVector []*SignatureVectorMessage	// Everybody's signatures
+												// from their trustees.
 
-	// fourth round, secrets finally released
-	secretVector []abstract.Secret
+	secretVector []abstract.Secret	// Everybody's secrets.
 }
 
 func NewSessionBase(context *context.Context) *SessionBase {
@@ -152,7 +149,7 @@ func (s *SessionBase) DoTrusteeExchange(i,
 }
 
 
-func (s *SessionBase) SendTrusteeShares(R int) error {
+func (s *SessionBase) SendTrusteeShares(Q, R int) error {
 	// Seed with H(V_C_p, C_i)
 	h := s.Suite.Hash()
 	for _, C_p := range s.V_C_p {
@@ -171,10 +168,14 @@ func (s *SessionBase) SendTrusteeShares(R int) error {
 	selected := trusteeRandom.Perm(s.N)[:R]
 
 	// Send the share and C_i to each selected trustee.
+	// Fire off all of the requests in parallel.
 	results := make(chan *TrusteeSignatureMessage, R)
-
+	expected := R
 	for i, trustee := range selected {
-		if trustee == s.Mine { continue }
+		if trustee == s.Mine {
+			expected--
+			continue
+		}
 
 		go func(i, trustee int) {
 			reply, err := s.DoTrusteeExchange(i, trustee)
@@ -186,15 +187,18 @@ func (s *SessionBase) SendTrusteeShares(R int) error {
 		}(i, trustee)
 	}
 
+	// Wait to get the signatures back for at least Q.
 	s.signatures = make([]*TrusteeSignatureMessage, R)
-	nilCount := 0
-	for i := 0; i < R-1; i++ {
+	received := R - expected
+	for i := 0; i < expected; i++ {
 		message := <- results
-		if message == nil {
-			nilCount++
-			continue
+		if message != nil {
+			s.signatures[message.Index] = message
+			received++
 		}
-		s.signatures[message.Index] = message
+	}
+	if received < Q {
+		return errors.New("ENOT_ENOUGH_SIGS")
 	}
 	return nil
 }

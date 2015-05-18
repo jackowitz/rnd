@@ -109,7 +109,6 @@ func (s *LeaderSession) SendHashCommitVector() error {
 }
 
 func (s *LeaderSession) ReceiveSignatureVectors() error {
-	fmt.Println("Waiting for signature vectors...")
 	results := s.ReadAll(func()interface{} {
 		return new(SignatureVectorMessage)
 	}, s.cons)
@@ -155,7 +154,7 @@ func (s *LeaderSession) ReceiveSecrets() error {
 		msgPtr := <- results
 		message, ok := msgPtr.(*SecretMessage)
 		if message == nil || !ok {
-			return errors.New("EBAD_COMMIT")
+			return errors.New("EBAD_SECRET")
 		}
 		s.secretVector[message.Source] = message.Secret
 	}
@@ -191,7 +190,7 @@ func (s *LeaderSession) RunLottery() {
 
 	go s.HandleSigningRequests()
 	s.GenerateTrusteeShares(s.K, s.N)
-	if err := s.SendTrusteeShares(s.N); err != nil {
+	if err := s.SendTrusteeShares(s.K, s.N); err != nil {
 		panic("SendTrusteeShares: " + err.Error())
 	}
 

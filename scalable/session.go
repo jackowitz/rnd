@@ -157,7 +157,7 @@ func (s *Session) RunLottery() {
 
 	go s.HandleSigningRequests()
 	s.GenerateTrusteeShares(s.K, s.N)
-	if err := s.SendTrusteeShares(s.N); err != nil {
+	if err := s.SendTrusteeShares(s.K, s.N); err != nil {
 		panic("SendTrusteeShares: " + err.Error())
 	}
 
