@@ -12,12 +12,13 @@ import (
 	"github.com/dedis/protobuf"
 	"reflect"
 	"rnd/broadcaster"
+	"rnd/context"
 	"rnd/prefix"
 )
 
 // Common to both the leader and the others.
 type SessionBase struct {
-	*Context
+	*context.Context
 	cons protobuf.Constructors
 
 	// The nonce identifying this session.
@@ -52,7 +53,7 @@ type SessionBase struct {
 	secretVector []abstract.Secret
 }
 
-func NewSessionBase(context *Context) *SessionBase {
+func NewSessionBase(context *context.Context) *SessionBase {
 
 	// Constructors for use with protobuf stuff.
 	var cons protobuf.Constructors =
@@ -129,13 +130,6 @@ func (s *SessionBase) DoTrusteeExchange(i,
 		return nil, err
 	}
 
-	/*
-	// send session nonce
-	buf, _ := s.Nonce.MarshalBinary()
-	if _, err := prefix.WritePrefix(conn, buf); err != nil {
-		return nil, err
-	}*/
-
 	// send share to trustee
 	message := &TrusteeShareMessage{
 		s.Mine, i,
@@ -150,7 +144,7 @@ func (s *SessionBase) DoTrusteeExchange(i,
 
 	// wait to get signature back
 	reply := new(TrusteeSignatureMessage)
-	if err := broadcaster.ReadOneTimeout(conn, reply, nil, time.Second); err != nil {
+	if err := broadcaster.ReadOneTimeout(conn, reply, nil, 3 * time.Second); err != nil {
 		return nil, err
 	}
 	conn.Close()
@@ -185,7 +179,7 @@ func (s *SessionBase) SendTrusteeShares(R int) error {
 		go func(i, trustee int) {
 			reply, err := s.DoTrusteeExchange(i, trustee)
 			if err != nil {
-				fmt.Println("Exchange: " + err.Error())
+				fmt.Println("Trustee Exchange: " + err.Error())
 				results <- nil
 			}
 			results <- reply

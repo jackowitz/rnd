@@ -8,6 +8,7 @@ import (
 	"github.com/dedis/crypto/nist"
 	"github.com/dedis/crypto/random"
 	"rnd/prefix"
+	"rnd/context"
 )
 
 type Server struct {
@@ -52,7 +53,7 @@ func NewServer() *Server {
 // new connections to the proper session, creating it
 // first if necessary.
 func (s *Server) HandleConnection(conn net.Conn,
-		context *Context) error {
+		context *context.Context) error {
 
 	// Extract the nonce that identifies the session.
 	buf, err := prefix.ReadPrefix(conn);
@@ -79,7 +80,7 @@ func (s *Server) HandleConnection(conn net.Conn,
 
 // This is where the bulk of the server work is done. Comments
 // near the main loop should explain things nicely.
-func (s *Server) Start(context *Context, requestsPort int) {
+func (s *Server) Start(context *context.Context, requestsPort int) {
 
 	// Start listening for connections from peers.
 	incoming, err := Listen(context.Self().Addr)

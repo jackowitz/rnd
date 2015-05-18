@@ -6,6 +6,7 @@ import (
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/protobuf"
 	"rnd/broadcaster"
+	"rnd/context"
 	"rnd/prefix"
 )
 
@@ -17,7 +18,7 @@ type Session struct {
 	Conn net.Conn
 }
 
-func NewSession(context *Context) {
+func NewSession(context *context.Context) {
 
 	scalable := &Session {
 		NewSessionBase(context),

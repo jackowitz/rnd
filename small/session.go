@@ -12,11 +12,12 @@ import (
 	"github.com/jackowitzd2/stopwatch"
 	"reflect"
 	"rnd/broadcaster"
+	"rnd/context"
 	"rnd/prefix"
 )
 
 type Session struct {
-	*Context
+	*context.Context
 	*broadcaster.Broadcaster
 
 	Nonce Nonce
@@ -37,7 +38,7 @@ type Session struct {
 // Returns immediately with a channel on which subsequent connections
 // to the session are delivered but spawns a new goroutine to run
 // the actual session.
-func NewSession(context *Context, nonce Nonce, replyConn net.Conn,
+func NewSession(context *context.Context, nonce Nonce, replyConn net.Conn,
 		done chan<- Nonce) chan <- net.Conn {
 
 	conns := make([]net.Conn, context.N)

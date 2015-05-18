@@ -1,12 +1,12 @@
-package main
+package context
 
 import (
+	"bufio"
 	"crypto/cipher"
-	"encoding/json"
 	"fmt"
-	"os"
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/anon"
+	"os"
 )
 
 type Peer struct {
@@ -30,36 +30,39 @@ func (p *PeerConfig) Self() *Peer {
 	return &p.Peers[p.Mine]
 }
 
-func (p *PeerConfig) Save(path string) error {
-	file, err := os.Create(path)
-	if err != nil {
-		return err
+func LocalHosts(n int) []string {
+	hosts := make([]string, n)
+	for i := range hosts {
+		hosts[i] = fmt.Sprintf("localhost:%d", 8080+i)
 	}
-	encoder := json.NewEncoder(file)
-	return encoder.Encode(p)
+	return hosts
 }
 
-func (p *PeerConfig) FromFile(path string) error {
+func LoadHostsFile(path string, n int) ([]string, error) {
+	hosts := make([]string, n)
 	file, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	decoder := json.NewDecoder(file)
-	return decoder.Decode(p)
+	reader := bufio.NewReader(file)
+	for i := range hosts {
+		host, _, err := reader.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+		hosts[i] = string(host)
+	}
+	return hosts, nil
 }
 
-// Generate a new configuration for running locally.
-func NewLocalPeerConfig(suite abstract.Suite,
-		random cipher.Stream, mine, n, k int) *PeerConfig {
+func NewPeerConfig(suite abstract.Suite, random cipher.Stream,
+		mine, n, k int, hosts []string) *PeerConfig {
 
 	peers := make([]Peer, n)
 	for i := range peers {
-		addr := fmt.Sprintf("localhost:%d", 8080 + i)
-
 		x := suite.Secret().Pick(random)
 		X := suite.Point().Mul(nil, x)
-
-		peers[i] = Peer{ i, addr, x, X }
+		peers[i] = Peer{ i, hosts[i], x, X }
 	}
 	return &PeerConfig{ peers, mine, n, k }
 }
@@ -71,14 +74,10 @@ type Context struct {
 	*PeerConfig
 }
 
-func NewContext(suite abstract.Suite,
-		random cipher.Stream, config *PeerConfig) *Context {
+func NewContext(suite abstract.Suite, random cipher.Stream,
+		config *PeerConfig) *Context {
 
 	return &Context{ suite, random, config}
-}
-
-func (c *Context) NextNonce() Nonce {
-	return c.Suite.Secret().Pick(c.Random)
 }
 
 // Sign the message in the current context.

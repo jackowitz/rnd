@@ -7,6 +7,7 @@ import (
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/nist"
 	"github.com/dedis/crypto/random"
+	"rnd/context"
 )
 
 const debug = true
@@ -23,6 +24,7 @@ var aNonce Nonce
 var tNonce = reflect.TypeOf(&aNonce).Elem()
 
 func main() {
+	hosts := flag.String("hosts", "", "hosts file")
 	n := flag.Int("n", 3, "number of servers")
 	k := flag.Int("k", 3, "share threshold")
 	flag.Parse()
@@ -40,10 +42,19 @@ func main() {
 
 	// Use a local setup for now.
 	contextRandom := suite.Cipher([]byte("test"))
-	config := NewLocalPeerConfig(suite, contextRandom, id, *n, *k)
+	var hostlist []string
+	if *hosts != "" {
+		hostlist, err = context.LoadHostsFile(*hosts, *n)
+		if err != nil {
+			panic("loadHostsFile: " + err.Error())
+		}
+	} else {
+		hostlist = context.LocalHosts(*n)
+	}
+	config := context.NewPeerConfig(suite, contextRandom, id, *n, *k, hostlist)
 
 	// Determine the context and protocol at runtime.
-	context := NewContext(suite, random, config)
+	context := context.NewContext(suite, random, config)
 
 	if id == 0 {
 		NewLeaderSession(context)

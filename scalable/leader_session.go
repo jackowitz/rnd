@@ -7,6 +7,7 @@ import (
 	"time"
 	"github.com/dedis/crypto/abstract"
 	"rnd/broadcaster"
+	"rnd/context"
 	"rnd/prefix"
 )
 
@@ -16,7 +17,7 @@ type LeaderSession struct {
 	*broadcaster.Broadcaster
 }
 
-func NewLeaderSession(context *Context) {
+func NewLeaderSession(context *context.Context) {
 
 	broadcaster := &broadcaster.Broadcaster {
 		make([]net.Conn, context.N),
