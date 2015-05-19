@@ -110,17 +110,6 @@ func (s *SessionBase) GenerateTrusteeShares() {
 	s.p_i.Commit(s.a_i, nil)
 }
 
-type TrusteeShareMessage struct {
-	Source, Index int
-	Share abstract.Secret
-	Commitment interface{} //poly.PubPoly
-}
-
-type TrusteeSignatureMessage struct {
-	Trustee, Source, Index int
-	//Signature []byte
-}
-
 func (s *SessionBase) DoTrusteeExchange(i,
 		trustee int) (*TrusteeSignatureMessage, error) {
 

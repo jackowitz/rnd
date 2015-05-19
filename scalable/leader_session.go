@@ -97,10 +97,6 @@ func (s *LeaderSession) ReceiveHashCommits() error {
 	return nil
 }
 
-type HashCommitVectorMessage struct {
-	Commits [][]byte
-}
-
 func (s *LeaderSession) SendHashCommitVector() error {
 	message := &HashCommitVectorMessage { s.V_C_p }
 	fmt.Println("Sent HashCommitVector.")
@@ -130,10 +126,6 @@ func (s *LeaderSession) ReceiveSignatureVectors() error {
 	return nil
 }
 
-type SignatureVectorVectorMessage struct {
-	Signatures []*SignatureVectorMessage
-}
-
 func (s *LeaderSession) SendSignatureVectorVector() error {
 	message := &SignatureVectorVectorMessage {
 		s.signatureVector,
@@ -160,15 +152,6 @@ func (s *LeaderSession) ReceiveSecrets() error {
 	}
 	fmt.Println("Got all Secrets.")
 	return nil
-}
-
-type ShareRequestMessage struct {
-	Keys	[]uint32
-}
-
-type ShareMessage struct {
-	Source	int
-	Shares	[]abstract.Secret
 }
 
 func (s *LeaderSession) RequestMissingShares() error {
@@ -234,10 +217,6 @@ func (s *LeaderSession) RequestMissingShares() error {
 		}
 	}
 	return nil
-}
-
-type SecretVectorMessage struct {
-	Secrets []abstract.Secret
 }
 
 func (s *LeaderSession) SendSecretVector() error {

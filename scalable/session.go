@@ -66,12 +66,6 @@ func (s *Session) Start(connChan <-chan net.Conn) {
 	s.RunLottery()
 }
 
-// The outer commitment to the secret.
-type HashCommitMessage struct {
-	Source int
-	Commit []byte
-}
-
 // Send the outer commitment to the leader.
 func (s *Session) SendHashCommit() error {
 	message, _ := protobuf.Encode(&HashCommitMessage{ s.Mine, s.C_i_p })
@@ -89,13 +83,6 @@ func (s *Session) ReceiveHashCommitVector() error {
 	s.V_C_p = message.Commits
 	fmt.Println("Got HashCommitVector.")
 	return nil
-}
-
-// The vector of signatures from trustees.
-type SignatureVectorMessage struct {
-	Source int
-	Commit abstract.Point
-	Signatures []*TrusteeSignatureMessage
 }
 
 // Send our vector of signatures to the leader.
@@ -117,12 +104,6 @@ func (s *Session) ReceiveSignatureVectorVector() error {
 	s.signatureVector = message.Signatures
 	fmt.Println("Got SignatureVectorVector.")
 	return nil
-}
-
-// The opened inner commitment - i.e. the secret.
-type SecretMessage struct {
-	Source int
-	Secret abstract.Secret
 }
 
 var EADVERSARY = errors.New("Adversarial failure")
