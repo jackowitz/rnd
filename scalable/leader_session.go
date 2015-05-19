@@ -85,7 +85,6 @@ func (s *LeaderSession) ReceiveHashCommits() error {
 // Send the vector of outer commitments to the clients.
 func (s *LeaderSession) SendHashCommitVector() error {
 	message := &HashCommitVectorMessage { s.V_C_p }
-	fmt.Println("Sent HashCommitVector.")
 	return s.Broadcast(func(i int)interface{} {
 		return message
 	})
@@ -220,7 +219,6 @@ func (s *LeaderSession) SendSecretVector() error {
 	message := &SecretVectorMessage{
 		s.secretVector,
 	}
-	fmt.Println("Sent SecretVector.")
 	return s.Broadcast(func(i int)interface{} {
 		return message
 	})
