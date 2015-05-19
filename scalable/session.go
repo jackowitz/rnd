@@ -12,13 +12,12 @@ import (
 	"time"
 )
 
-// Functionality specific to sessions run on all servers
-// other than the leader.
+// Functionality specific to clients other than the leader.
 type Session struct {
 	*SessionBase
-	isAdversary bool
 
-	Conn net.Conn
+	isAdversary bool	// Adversary won't reveal secret.
+	Conn net.Conn		// Connection to the leader.
 }
 
 func NewSession(context *context.Context, R, Q int, isAdversary bool) *Session {
@@ -31,12 +30,14 @@ func NewSession(context *context.Context, R, Q int, isAdversary bool) *Session {
 }
 
 func (s *Session) Start() {
-	// Start up any core session stuff, namely a listen
-	// socket for trustee requests later.
 	s.SessionBase.Start()
 
-	// Get our connection to the leader.
+	// Get a connection to the leader. For now we assume
+	// it's the first connection we get, although this could
+	// definitely be more robust.
 	s.Conn = <- s.ConnChan
+
+	// Get the nonce used to identify the session.
 	buf, err := prefix.ReadPrefix(s.Conn)
 	if err != nil {
 		panic("Reading Nonce: " + err.Error())
@@ -55,7 +56,6 @@ func (s *Session) Start() {
 func (s *Session) SendHashCommit() error {
 	message, _ := protobuf.Encode(&HashCommitMessage{ s.Mine, s.C_i_p })
 	_, err := prefix.WritePrefix(s.Conn, message)
-	fmt.Println("Sent HashCommit.")
 	return err
 }
 
@@ -66,7 +66,6 @@ func (s *Session) ReceiveHashCommitVector() error {
 		return err
 	}
 	s.V_C_p = message.Commits
-	fmt.Println("Got HashCommitVector.")
 	return nil
 }
 
@@ -76,7 +75,6 @@ func (s *Session) SendSignatureVector() error {
 		s.Mine, s.C_i, s.signatures,
 	})
 	_, err := prefix.WritePrefix(s.Conn, message)
-	fmt.Println("Sent SignatureVector.")
 	return err
 }
 
@@ -87,13 +85,15 @@ func (s *Session) ReceiveSignatureVectorVector() error {
 		return err
 	}
 	s.signatureVector = message.Signatures
-	fmt.Println("Got SignatureVectorVector.")
 	return nil
 }
 
+// Error used to indicated that the failure was expected.
+// Purely for experimentation purposes.
 var EADVERSARY = errors.New("Adversarial failure")
 
-// Send our secret to the leader.
+// Send our secret to the leader, unless we're an adversary,
+// in which case we just stop and laugh maniacally
 func (s *Session) SendSecret() error {
 	if s.isAdversary {
 		return EADVERSARY
@@ -102,30 +102,35 @@ func (s *Session) SendSecret() error {
 		s.Mine, s.s_i,
 	})
 	_, err := prefix.WritePrefix(s.Conn, message)
-	fmt.Println("Sent Secret.")
 	return err
 }
 
 // Somebody didn't send their secret, we need to help reconstruct
 // it using the shares that we're holding.
-func (s *Session) ReceiveShareRequests() error {
-	fmt.Println("Got ShareRequest.")
+// For now, we always perform such requests, even if there are
+// no missing shares, in which case both the request and response
+// message will be empty. This can definitely be optimized away.
+func (s *Session) HandleSharesRequest() error {
+	// Read the share request from the leader.
 	message := new(ShareRequestMessage)
 	if err := broadcaster.ReadOne(s.Conn, message, s.cons); err != nil {
 		return err
 	}
+	// Lookup the shares that are being requested. If for some
+	// reason we don't have a share, send back a nil and let the
+	// leader resolve it when trying to reconstuct the secret.
+	// The order of shares in the reply matches the order of the
+	// keys in the request.
 	shares := make([]abstract.Secret, len(message.Keys))
 	for i, key := range message.Keys {
 		shares[i] = s.shares[key]
-		fmt.Printf("Sending %d, %d (%s)to leader.\n", key>>16,
-			key&0xffff, shares[i])
 	}
 
+	// Send the shares back to the leader in a single message.
 	reply, _ := protobuf.Encode(&ShareMessage{
 		s.Mine, shares,
 	})
 	_, err := prefix.WritePrefix(s.Conn, reply)
-	fmt.Println("Sent Shares.")
 	return err
 }
 
@@ -136,7 +141,6 @@ func (s *Session) ReceiveSecretVector() error {
 		return err
 	}
 	s.secretVector = message.Secrets
-	fmt.Println("Got SecretVector.")
 	return nil
 }
 
@@ -169,7 +173,7 @@ func (s *Session) RunLottery() {
 		panic("SendSecret: " + err.Error())
 	}
 
-	if err := s.ReceiveShareRequests(); err != nil {
+	if err := s.HandleSharesRequest(); err != nil {
 		panic("ReceiveShareRequests: " + err.Error())
 	}
 

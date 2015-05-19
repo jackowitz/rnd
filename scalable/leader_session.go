@@ -31,8 +31,6 @@ func NewLeaderSession(context *context.Context, R, Q int) *LeaderSession {
 	return session
 }
 
-var timeout = 3 * time.Second
-
 func (s *LeaderSession) Start() {
 	s.SessionBase.Start()
 
@@ -46,6 +44,7 @@ func (s *LeaderSession) Start() {
 		if s.IsMine(i) {
 			continue
 		}
+		timeout := 3 * time.Second
 		conn, err := net.DialTimeout("tcp", s.Peers[i].Addr, timeout)
 		if err != nil {
 			format := "Unable to connect to server at %s"
@@ -63,6 +62,7 @@ func (s *LeaderSession) Start() {
 	s.RunLottery()
 }
 
+// Receive an outer commitment from every other client.
 func (s *LeaderSession) ReceiveHashCommits() error {
 	results := s.ReadAll(func()interface{} {
 		return new(HashCommitMessage)
@@ -79,10 +79,10 @@ func (s *LeaderSession) ReceiveHashCommits() error {
 		}
 		s.V_C_p[message.Source] = message.Commit
 	}
-	fmt.Println("Got all HashCommits.")
 	return nil
 }
 
+// Send the vector of outer commitments to the clients.
 func (s *LeaderSession) SendHashCommitVector() error {
 	message := &HashCommitVectorMessage { s.V_C_p }
 	fmt.Println("Sent HashCommitVector.")
@@ -91,6 +91,8 @@ func (s *LeaderSession) SendHashCommitVector() error {
 	})
 }
 
+// Receive a vector of trustee signatures from all of
+// the other clients.
 func (s *LeaderSession) ReceiveSignatureVectors() error {
 	results := s.ReadAll(func()interface{} {
 		return new(SignatureVectorMessage)
@@ -108,20 +110,22 @@ func (s *LeaderSession) ReceiveSignatureVectors() error {
 		}
 		s.signatureVector[message.Source] = message
 	}
-	fmt.Println("Got all SignatureVectors.")
 	return nil
 }
 
+// Send the vector of signature vectors to the clients.
 func (s *LeaderSession) SendSignatureVectorVector() error {
 	message := &SignatureVectorVectorMessage {
 		s.signatureVector,
 	}
-	fmt.Println("Sent SignatureVectorVector.")
 	return s.Broadcast(func(i int)interface{} {
 		return message
 	})
 }
 
+// Receive a secret from all clients. Some adversarial clients
+// may not send a valid secret (or a secret at all(, but we'll
+// deal with that later.
 func (s *LeaderSession) ReceiveSecrets() error {
 	results := s.ReadAll(func()interface{} {
 		return new(SecretMessage)
@@ -136,10 +140,13 @@ func (s *LeaderSession) ReceiveSecrets() error {
 			s.secretVector[message.Source] = message.Secret
 		}
 	}
-	fmt.Println("Got all Secrets.")
 	return nil
 }
 
+// Request shares of any missing secret from the trustees
+// that are holding those shares. For efficiency, we send
+// only a single request to each client, batching all shares
+// that we need from them.
 func (s *LeaderSession) RequestMissingShares() error {
 	// Tally up what we need to request and from whom.
 	shareKeys := make([][]uint32, s.N)
@@ -147,34 +154,34 @@ func (s *LeaderSession) RequestMissingShares() error {
 		shareKeys[i] = make([]uint32, 0, s.N)
 	}
 
-	// Might as well prep the shares now while we're at it.
+	// Keep track of the shares the we receive for
+	// interpolation later.
 	shares := make([]*poly.PriShares, s.N)
 
+	// Check every secret to see if it's valid.
+	// XXX: check for equivocation as well
 	for i, signature := range s.signatureVector {
 		if s.secretVector[i] == nil {
 			fmt.Printf("Missing secret from %d.\n", i)
 			shares[i] = new(poly.PriShares)
-			shares[i].Empty(s.Suite, s.K, s.N)
+			shares[i].Empty(s.Suite, s.Q, s.R)
 
+			// Find the trustees holding shares of the missing secret.
 			C_i := signature.Commit
 			trustees := s.findTrustees(C_i)
 			for index, trustee := range trustees {
 				key := uint32(i << 16 | index)
-				fmt.Printf("Requesting %d, %d from %d.\n", i, index, trustee)
 				shareKeys[trustee] = append(shareKeys[trustee], key)
 			}
 		}
 	}
 
-	// Send out the requests for shares.
-	err := s.Broadcast(func(i int)interface{} {
+	// Send out the batched requests for shares to the clients.
+	s.Broadcast(func(i int)interface{} {
 		return &ShareRequestMessage{ shareKeys[i] }
 	})
-	if err != nil {
-		return err
-	}
 
-	// Wait to hear back from everyone.
+	// Receive the requested shares from all clients.
 	results := s.ReadAll(func()interface{} {
 		return new(ShareMessage)
 	}, s.cons)
@@ -185,18 +192,21 @@ func (s *LeaderSession) RequestMissingShares() error {
 		if message == nil || !ok {
 			continue
 		}
+		// Fill in the shares that the client sent back.
 		for i, key := range shareKeys[message.Source] {
-			fmt.Printf("Got %d, %d from %d.\n", key>>16, key&0xffff, message.Source)
 			shares[key >> 16].SetShare(int(key & 0xffff), message.Shares[i])
-		}
-		// Fill in any shares we've been holding, if needed.
-		for key, share := range s.shares {
-			if shares[key >> 16] != nil {
-				shares[key >> 16].SetShare(int(key & 0xffff), share)
-			}
 		}
 	}
 
+	// Fill in any shares that we were responsible for as
+	// a trustee, if necessary.
+	for key, share := range s.shares {
+		if shares[key >> 16] != nil {
+			shares[key >> 16].SetShare(int(key & 0xffff), share)
+		}
+	}
+
+	// Use the shares to reconstuct the missing secrets.
 	for i := range shares {
 		if shares[i] != nil {
 			s.secretVector[i] = shares[i].Secret()
@@ -205,6 +215,7 @@ func (s *LeaderSession) RequestMissingShares() error {
 	return nil
 }
 
+// Send the vector of secrets to the clients.
 func (s *LeaderSession) SendSecretVector() error {
 	message := &SecretVectorMessage{
 		s.secretVector,
@@ -215,6 +226,8 @@ func (s *LeaderSession) SendSecretVector() error {
 	})
 }
 
+// The main protocol structure, broken down be step to (hopefully)
+// be both easy to follow and easy to evaluate at finer granularity.
 func (s *LeaderSession) RunLottery() {
 	s.GenerateInitialShares()
 
@@ -248,8 +261,9 @@ func (s *LeaderSession) RunLottery() {
 		panic("RequestMissingShares: " + err.Error())
 	}
 
+	// We may get errors here if adversarial clients go offline
+	// entirely, so we just log them and continue on.
 	if err := s.SendSecretVector(); err != nil {
-		//panic("SendSecretVector: " + err.Error())
 		fmt.Println("SendSecretVector: " + err.Error())
 	}
 

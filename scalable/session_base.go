@@ -256,7 +256,6 @@ func (s *SessionBase) HandleSigningRequest(conn net.Conn) error {
 	// Store the share away so we can produce it later, if needed.
 	key := uint32(message.Source << 16 | message.Index)
 	s.shares[key] = message.Share
-	fmt.Printf("Holding share %d for %d.\n", message.Index, message.Source)
 
 	// Reply with our attestation that we are holding this
 	// particular share for the requesting client.
