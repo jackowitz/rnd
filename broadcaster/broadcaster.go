@@ -71,7 +71,6 @@ func (b *Broadcaster) ReadAll(constructor func()interface{},
 		message := constructor()
 		go func(conn net.Conn, message interface{}) {
 			if err := ReadOne(conn, message, cons); err != nil {
-				fmt.Println("ReadOne: " + err.Error())
 				results <- nil
 			} else {
 				results <- message
