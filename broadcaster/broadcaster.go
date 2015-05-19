@@ -30,10 +30,7 @@ func (b *Broadcaster) Broadcast(constructor func(int)interface{}) error {
 
 		message := constructor(i)
 		data, _ := protobuf.Encode(message)
-		_, err := prefix.WritePrefix(conn, data)
-		if err != nil {
-			return err
-		}
+		prefix.WritePrefix(conn, data)
 	}
 	return nil
 }
