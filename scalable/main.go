@@ -27,6 +27,7 @@ func main() {
 	hosts := flag.String("hosts", "", "hosts file")
 	n := flag.Int("n", 3, "number of servers")
 	k := flag.Int("k", 3, "share threshold")
+	adversary := flag.Bool("adversary", false, "don't send secret")
 	flag.Parse()
 	if flag.NArg() < 1 {
 		panic("must specify server index")
@@ -51,14 +52,15 @@ func main() {
 	} else {
 		hostlist = context.LocalHosts(*n)
 	}
-	config := context.NewPeerConfig(suite, contextRandom, id, *n, *k, hostlist)
+	config := context.NewPeerConfig(suite, contextRandom, id,
+			*n, *k, hostlist)
 
 	// Determine the context and protocol at runtime.
 	context := context.NewContext(suite, random, config)
 
 	if id == 0 {
-		NewLeaderSession(context)
+		NewLeaderSession(context, *n, *k)
 	} else {
-		NewSession(context)
+		NewSession(context, *n, *k, *adversary)
 	}
 }

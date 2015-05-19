@@ -10,7 +10,11 @@ function start_rnd {
   k=$2
   go build -o $BINARY rnd/scalable
   for i in `seq $(($n - 1)) -1 0`; do
-    ./$BINARY -n=$n -k=$k $i &> logs/server-$i.log &
+	args=""
+	if [[ $i -gt $k ]]; then
+		args+="-adversary=true"
+	fi
+    ./$BINARY -n=$n -k=$k $args $i &> logs/server-$i.log &
 	sleep 0.1
   done
   echo "Started $n servers."

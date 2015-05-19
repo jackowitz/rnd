@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"github.com/dedis/crypto/abstract"
@@ -14,14 +15,15 @@ import (
 // other than the leader.
 type Session struct {
 	*SessionBase
+	isAdversary bool
 
 	Conn net.Conn
 }
 
-func NewSession(context *context.Context) {
-
+func NewSession(context *context.Context, R, Q int, isAdversary bool) {
 	scalable := &Session {
-		NewSessionBase(context),
+		NewSessionBase(context, R, Q),
+		isAdversary,
 		nil,
 	}
 
@@ -74,7 +76,7 @@ type HashCommitMessage struct {
 func (s *Session) SendHashCommit() error {
 	message, _ := protobuf.Encode(&HashCommitMessage{ s.Mine, s.C_i_p })
 	_, err := prefix.WritePrefix(s.Conn, message)
-	fmt.Println("Sent hash commit.")
+	fmt.Println("Sent HashCommit.")
 	return err
 }
 
@@ -123,13 +125,41 @@ type SecretMessage struct {
 	Secret abstract.Secret
 }
 
+var EADVERSARY = errors.New("Adversarial failure")
+
 // Send our secret to the leader.
 func (s *Session) SendSecret() error {
+	if s.isAdversary {
+		return EADVERSARY
+	}
 	message, _ := protobuf.Encode(&SecretMessage{
 		s.Mine, s.s_i,
 	})
 	_, err := prefix.WritePrefix(s.Conn, message)
 	fmt.Println("Sent Secret.")
+	return err
+}
+
+// Somebody didn't send their secret, we need to help reconstruct
+// it using the shares that we're holding.
+func (s *Session) ReceiveShareRequests() error {
+	fmt.Println("Got ShareRequest.")
+	message := new(ShareRequestMessage)
+	if err := broadcaster.ReadOne(s.Conn, message, s.cons); err != nil {
+		return err
+	}
+	shares := make([]abstract.Secret, len(message.Keys))
+	for i, key := range message.Keys {
+		shares[i] = s.shares[key]
+		fmt.Printf("Sending %d, %d (%s)to leader.\n", key>>16,
+			key&0xffff, shares[i])
+	}
+
+	reply, _ := protobuf.Encode(&ShareMessage{
+		s.Mine, shares,
+	})
+	_, err := prefix.WritePrefix(s.Conn, reply)
+	fmt.Println("Sent Shares.")
 	return err
 }
 
@@ -156,8 +186,8 @@ func (s *Session) RunLottery() {
 	}
 
 	go s.HandleSigningRequests()
-	s.GenerateTrusteeShares(s.K, s.N)
-	if err := s.SendTrusteeShares(s.K, s.N); err != nil {
+	s.GenerateTrusteeShares()
+	if err := s.SendTrusteeShares(); err != nil {
 		panic("SendTrusteeShares: " + err.Error())
 	}
 
@@ -171,6 +201,10 @@ func (s *Session) RunLottery() {
 
 	if err := s.SendSecret(); err != nil {
 		panic("SendSecret: " + err.Error())
+	}
+
+	if err := s.ReceiveShareRequests(); err != nil {
+		panic("ReceiveShareRequests: " + err.Error())
 	}
 
 	if err := s.ReceiveSecretVector(); err != nil {

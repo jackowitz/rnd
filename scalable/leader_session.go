@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 	"github.com/dedis/crypto/abstract"
+	"github.com/dedis/crypto/poly"
 	"rnd/broadcaster"
 	"rnd/context"
 	"rnd/prefix"
@@ -17,14 +18,14 @@ type LeaderSession struct {
 	*broadcaster.Broadcaster
 }
 
-func NewLeaderSession(context *context.Context) {
+func NewLeaderSession(context *context.Context, R, Q int) {
 
 	broadcaster := &broadcaster.Broadcaster {
 		make([]net.Conn, context.N),
 	}
 
 	session := &LeaderSession {
-		NewSessionBase(context),
+		NewSessionBase(context, R, Q),
 		broadcaster,
 	}
 
@@ -153,12 +154,85 @@ func (s *LeaderSession) ReceiveSecrets() error {
 	for pending := s.N-1; pending > 0; pending-- {
 		msgPtr := <- results
 		message, ok := msgPtr.(*SecretMessage)
-		if message == nil || !ok {
-			return errors.New("EBAD_SECRET")
+		if ok && message != nil {
+			s.secretVector[message.Source] = message.Secret
 		}
-		s.secretVector[message.Source] = message.Secret
 	}
 	fmt.Println("Got all Secrets.")
+	return nil
+}
+
+type ShareRequestMessage struct {
+	Keys	[]uint32
+}
+
+type ShareMessage struct {
+	Source	int
+	Shares	[]abstract.Secret
+}
+
+func (s *LeaderSession) RequestMissingShares() error {
+	// Tally up what we need to request and from whom.
+	shareKeys := make([][]uint32, s.N)
+	for i := range shareKeys {
+		shareKeys[i] = make([]uint32, 0, s.N)
+	}
+
+	// Might as well prep the shares now while we're at it.
+	shares := make([]*poly.PriShares, s.N)
+
+	for i, signature := range s.signatureVector {
+		if s.secretVector[i] == nil {
+			fmt.Printf("Missing secret from %d.\n", i)
+			shares[i] = new(poly.PriShares)
+			shares[i].Empty(s.Suite, s.K, s.N)
+
+			C_i := signature.Commit
+			trustees := s.findTrustees(C_i)
+			for index, trustee := range trustees {
+				key := uint32(i << 16 | index)
+				fmt.Printf("Requesting %d, %d from %d.\n", i, index, trustee)
+				shareKeys[trustee] = append(shareKeys[trustee], key)
+			}
+		}
+	}
+
+	// Send out the requests for shares.
+	err := s.Broadcast(func(i int)interface{} {
+		return &ShareRequestMessage{ shareKeys[i] }
+	})
+	if err != nil {
+		return err
+	}
+
+	// Wait to hear back from everyone.
+	results := s.ReadAll(func()interface{} {
+		return new(ShareMessage)
+	}, s.cons)
+
+	for pending := s.N-1; pending > 0; pending-- {
+		msgPtr := <-results
+		message, ok := msgPtr.(*ShareMessage)
+		if message == nil || !ok {
+			continue
+		}
+		for i, key := range shareKeys[message.Source] {
+			fmt.Printf("Got %d, %d from %d.\n", key>>16, key&0xffff, message.Source)
+			shares[key >> 16].SetShare(int(key & 0xffff), message.Shares[i])
+		}
+		// Fill in any shares we've been holding, if needed.
+		for key, share := range s.shares {
+			if shares[key >> 16] != nil {
+				shares[key >> 16].SetShare(int(key & 0xffff), share)
+			}
+		}
+	}
+
+	for i := range shares {
+		if shares[i] != nil {
+			s.secretVector[i] = shares[i].Secret()
+		}
+	}
 	return nil
 }
 
@@ -189,8 +263,8 @@ func (s *LeaderSession) RunLottery() {
 	}
 
 	go s.HandleSigningRequests()
-	s.GenerateTrusteeShares(s.K, s.N)
-	if err := s.SendTrusteeShares(s.K, s.N); err != nil {
+	s.GenerateTrusteeShares()
+	if err := s.SendTrusteeShares(); err != nil {
 		panic("SendTrusteeShares: " + err.Error())
 	}
 
@@ -206,8 +280,13 @@ func (s *LeaderSession) RunLottery() {
 		panic("ReceiveSecrets: " + err.Error())
 	}
 
+	if err := s.RequestMissingShares(); err != nil {
+		panic("RequestMissingShares: " + err.Error())
+	}
+
 	if err := s.SendSecretVector(); err != nil {
-		panic("SendSecretVector: " + err.Error())
+		//panic("SendSecretVector: " + err.Error())
+		fmt.Println("SendSecretVector: " + err.Error())
 	}
 
 	if err := s.CalculateTickets(); err != nil {
