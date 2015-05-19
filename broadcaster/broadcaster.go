@@ -1,7 +1,6 @@
 package broadcaster
 
 import (
-	"fmt"
 	"github.com/dedis/protobuf"
 	"net"
 	"rnd/prefix"
