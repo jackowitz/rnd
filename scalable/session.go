@@ -9,6 +9,7 @@ import (
 	"rnd/broadcaster"
 	"rnd/context"
 	"rnd/prefix"
+	"time"
 )
 
 // Functionality specific to sessions run on all servers
@@ -152,7 +153,7 @@ func (s *Session) RunLottery() {
 
 	go s.HandleSigningRequests()
 	s.GenerateTrusteeShares()
-	if err := s.SendTrusteeShares(); err != nil {
+	if err := s.SendTrusteeShares(3 * time.Second); err != nil {
 		panic("SendTrusteeShares: " + err.Error())
 	}
 

@@ -52,7 +52,6 @@ type SessionBase struct {
 }
 
 func NewSessionBase(context *context.Context, R, Q int) *SessionBase {
-
 	// Constructors for use with protobuf stuff.
 	var cons protobuf.Constructors =
 		func(t reflect.Type) interface{} {
@@ -69,22 +68,7 @@ func NewSessionBase(context *context.Context, R, Q int) *SessionBase {
 		}
 
 	return &SessionBase {
-		context,
-		R, Q,
-		cons,
-		nil,
-		nil,
-		context.Suite.Secret(),
-		context.Suite.Point(),
-		nil,
-		make([][]byte, context.N),
-		new(poly.PriPoly),
-		new(poly.PriShares),
-		new(poly.PubPoly),
-		nil,
-		nil,
-		nil,
-		nil,
+		Context: context, R: R, Q: Q, cons: cons,
 	}
 }
 
@@ -116,10 +100,10 @@ func (s *SessionBase) Start() {
 // commitments to that secret.
 func (s *SessionBase) GenerateInitialShares() {
 	// The secret (s_i).
-	s.s_i.Pick(s.Random)
+	s.s_i = s.Suite.Secret().Pick(s.Random)
 
 	// Inner commitment (C_i = g^s_i).
-	s.C_i.Mul(nil, s.s_i)
+	s.C_i = s.Suite.Point().Mul(nil, s.s_i)
 
 	// Outer commitment (C_i_prime = H(C_i)).
 	h := s.Suite.Hash()
@@ -132,30 +116,34 @@ func (s *SessionBase) GenerateInitialShares() {
 // reconstruct the secret.
 func (s *SessionBase) GenerateTrusteeShares() {
 	// Pick a polynomial, with the secret as p(0).
+	s.a_i = new(poly.PriPoly)
 	s.a_i.Pick(s.Suite, s.Q, s.s_i, s.Random)
 
 	// Generate a commitment to the polynomial, allowing shares
 	// of the polynomial to be verified.
+	s.p_i = new(poly.PubPoly)
 	s.p_i.Commit(s.a_i, nil)
 
 	// Produce the actual shares.
+	s.sh_i = new(poly.PriShares)
 	s.sh_i.Split(s.a_i, s.R)
 }
 
-func (s *SessionBase) DoTrusteeExchange(i,
-		trustee int) (*TrusteeSignatureMessage, error) {
+// Perform the full request, response, verification cycle with
+// a single trustee.
+func (s *SessionBase) DoTrusteeExchange(shareIndex,
+		trusteeIndex int, timeout time.Duration) (*TrusteeSignatureMessage, error) {
 
-	// Connect to the trustee.
-	conn, err := net.DialTimeout("tcp", s.Peers[trustee].Addr, timeout)
+	// Form a short-lived connection to the trustee.
+	addr := s.Peers[trusteeIndex].Addr
+	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return nil, err
 	}
 
-	// send share to trustee
+	// Send the request off...
 	message := &TrusteeShareMessage{
-		s.Mine, i,
-		s.sh_i.Share(i),
-		s.p_i,
+		s.Mine, shareIndex, s.sh_i.Share(shareIndex), s.p_i,
 	}
 	buf, _ := protobuf.Encode(message)
 	_, err = prefix.WritePrefix(conn, buf)
@@ -163,19 +151,25 @@ func (s *SessionBase) DoTrusteeExchange(i,
 		return nil, err
 	}
 
-	// wait to get signature back
+	// ...and wait to get signature back.
 	reply := new(TrusteeSignatureMessage)
-	if err := broadcaster.ReadOneTimeout(conn, reply, nil, 3 * time.Second); err != nil {
+	if err := broadcaster.ReadOneTimeout(conn, reply, nil, timeout); err != nil {
 		return nil, err
 	}
 	conn.Close()
+
+	// XXX: verify signature!
 	return reply, nil
 }
 
 // Find the set of trustees responsible for holding the secret
-// corresponding to the provided commitment.
+// corresponding to the provided commitment. Clients use this to
+// initially find their trustees, and the leader may need it to
+// locate the trustees later to recover shares.
 func (s *SessionBase) findTrustees(C_i abstract.Point) []int {
-	// Seed with H(V_C_p, C_i)
+	// Seed the selection with H(V_C_p, C_i), so the leader can
+	// re-create the choice later if needed (and so anyone can
+	// verify that the trustees were chosen properly).
 	h := s.Suite.Hash()
 	for _, C_p := range s.V_C_p {
 		h.Write(C_p)
@@ -184,8 +178,8 @@ func (s *SessionBase) findTrustees(C_i abstract.Point) []int {
 	h.Write(cib)
 	seedBytes := h.Sum(nil)
 
-	// Convoluted mechanism here... all we're trying to do is
-	// pick R out of N elements!
+	// Go seems to require a fairly convoluted/ugly mechanism
+	// for picking a random sub-slice. Oh well, it works...
 	var seed int64
 	buf := bytes.NewBuffer(seedBytes[:8])
 	binary.Read(buf, binary.LittleEndian, &seed)
@@ -193,22 +187,27 @@ func (s *SessionBase) findTrustees(C_i abstract.Point) []int {
 	return trusteeRandom.Perm(s.N)[:s.R]
 }
 
-func (s *SessionBase) SendTrusteeShares() error {
+// Perform the exchange with the full set of trustees. Since
+// each request/signature exchange is independent of the others,
+// we fire them all off in parallel and then wait for the replies
+// (or a timeout).
+func (s *SessionBase) SendTrusteeShares(timeout time.Duration) error {
 
-	// Send the share and C_i to each selected trustee.
-	// Fire off all of the requests in parallel.
 	results := make(chan *TrusteeSignatureMessage, s.R)
 	expected := s.R
 
 	trustees := s.findTrustees(s.C_i)
 	for i, trustee := range trustees {
+		// Possible we picked ourself to be a trustee. For now
+		// we'll say that that's OK.
 		if trustee == s.Mine {
 			expected--
 			continue
 		}
 
+		// Sent off the requests, each in their own goroutine.
 		go func(i, trustee int) {
-			reply, err := s.DoTrusteeExchange(i, trustee)
+			reply, err := s.DoTrusteeExchange(i, trustee, timeout)
 			if err != nil {
 				fmt.Println("Trustee Exchange: " + err.Error())
 				results <- nil
@@ -217,7 +216,9 @@ func (s *SessionBase) SendTrusteeShares() error {
 		}(i, trustee)
 	}
 
-	// Wait to get the signatures back for at least Q.
+	// Wait to get signatures or errors back from all of the
+	// trustees and make sure that at least Q of them were
+	// successful.
 	s.signatures = make([]*TrusteeSignatureMessage, s.R)
 	received := s.R - expected
 	for i := 0; i < expected; i++ {
@@ -228,12 +229,17 @@ func (s *SessionBase) SendTrusteeShares() error {
 		}
 	}
 	if received < s.Q {
-		return errors.New("ENOT_ENOUGH_SIGS")
+		return errors.New("ENOT_ENOUGH_TRUSTEES")
 	}
 	return nil
 }
 
+// Handle a single request to serve as a trustee for a share of
+// a secret. Right now all requests are being served by the same
+// goroutine, but it may make sense to parallelize them.
 func (s *SessionBase) HandleSigningRequest(conn net.Conn) error {
+	// Initialize the message. We could just as easily put a
+	// PubPoly constructor into the protobuf map...
 	commitment := new(poly.PubPoly)
 	commitment.Init(s.Suite, s.K, nil)
 
@@ -241,11 +247,19 @@ func (s *SessionBase) HandleSigningRequest(conn net.Conn) error {
 	message.Share = s.Suite.Secret()
 	message.Commitment = commitment
 
+	// Read the incoming request.
 	err := broadcaster.ReadOne(conn, message, nil)
 	if err != nil {
 		return err
 	}
 
+	// Store the share away so we can produce it later, if needed.
+	key := uint32(message.Source << 16 | message.Index)
+	s.shares[key] = message.Share
+	fmt.Printf("Holding share %d for %d.\n", message.Index, message.Source)
+
+	// Reply with our attestation that we are holding this
+	// particular share for the requesting client.
 	reply := &TrusteeSignatureMessage {
 		s.Mine, message.Source, message.Index,
 	}
@@ -255,13 +269,11 @@ func (s *SessionBase) HandleSigningRequest(conn net.Conn) error {
 		return err
 	}
 	conn.Close()
-
-	fmt.Printf("Holding share %d for %d.\n", message.Index, message.Source)
-	key := uint32(message.Source << 16 | message.Index)
-	s.shares[key] = message.Share
 	return nil
 }
 
+// Loop to multiplex incoming requests to serve as a trustee.
+// Delegates the actual work.
 func (s *SessionBase) HandleSigningRequests() error {
 	timeout := time.After(time.Second * 5)
 
@@ -275,13 +287,12 @@ Listen:
 			s.HandleSigningRequest(conn)
 		}
 	}
-	fmt.Println("Done accepting signing requests.")
-	fmt.Printf("Holding %d shares.\n", len(s.shares))
 	return nil
 }
 
-// Perform local calculations needed to determine the
-// "winning" lottery tickets.
+// Perform local calculations to determine the "winning" lottery
+// tickets. In this case, we just do the hashing and then dump
+// each client's "ticket" to the console.
 func (s *SessionBase) CalculateTickets() error {
 	for i := 0; i < s.N; i++ {
 		h := s.Suite.Hash()

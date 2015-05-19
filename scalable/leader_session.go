@@ -4,12 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"time"
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/poly"
 	"rnd/broadcaster"
 	"rnd/context"
 	"rnd/prefix"
+	"time"
 )
 
 type LeaderSession struct {
@@ -34,8 +34,6 @@ func NewLeaderSession(context *context.Context, R, Q int) *LeaderSession {
 var timeout = 3 * time.Second
 
 func (s *LeaderSession) Start() {
-	// Start up any core session stuff, namely a listen
-	// socket for trustee requests later.
 	s.SessionBase.Start()
 
 	// Generate a nonce for the session.
@@ -69,6 +67,9 @@ func (s *LeaderSession) ReceiveHashCommits() error {
 	results := s.ReadAll(func()interface{} {
 		return new(HashCommitMessage)
 	}, s.cons)
+
+	s.V_C_p = make([][]byte, s.N)
+	s.V_C_p[s.Mine] = s.C_i_p
 
 	for pending := s.N-1; pending > 0; pending-- {
 		msgPtr := <- results
@@ -216,7 +217,6 @@ func (s *LeaderSession) SendSecretVector() error {
 
 func (s *LeaderSession) RunLottery() {
 	s.GenerateInitialShares()
-	s.V_C_p[s.Mine] = s.C_i_p
 
 	if err := s.ReceiveHashCommits(); err != nil {
 		panic("ReceiveHashCommits: " + err.Error())
@@ -228,7 +228,7 @@ func (s *LeaderSession) RunLottery() {
 
 	go s.HandleSigningRequests()
 	s.GenerateTrusteeShares()
-	if err := s.SendTrusteeShares(); err != nil {
+	if err := s.SendTrusteeShares(3 * time.Second); err != nil {
 		panic("SendTrusteeShares: " + err.Error())
 	}
 
