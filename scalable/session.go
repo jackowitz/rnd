@@ -144,6 +144,8 @@ func (s *Session) ReceiveSecretVector() error {
 	return nil
 }
 
+// The main protocol structure, broken down be step to (hopefully)
+// be both easy to follow and easy to evaluate at finer granularity.
 func (s *Session) RunLottery() {
 
 	s.GenerateInitialShares()
