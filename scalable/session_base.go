@@ -88,26 +88,58 @@ func NewSessionBase(context *context.Context, R, Q int) *SessionBase {
 	}
 }
 
-// Generates all of the values we need for Step 1, namely
-// the secret and the inner and outer commitments.
+// Start up any core session stuff, namely listening for requests
+// to be a trustee as these will come to both the leader and
+// regular clients.
+// XXX: Right now trustee requests come in on the same port as the
+// initial connection from the leader, using the heuristic that the
+// first connection will be the leader.
+func (s *SessionBase) Start() {
+	server, err := net.Listen("tcp", s.Self().Addr)
+	if err != nil {
+		panic("Listen: " + err.Error())
+	}
+	incoming := make(chan net.Conn, s.N)
+	go func() {
+		for {
+			conn, err := server.Accept()
+			if err != nil {
+				continue
+			}
+			incoming <- conn
+		}
+	}()
+	s.ConnChan = incoming
+}
+
+// Pick a random secret and generate the inner and outer
+// commitments to that secret.
 func (s *SessionBase) GenerateInitialShares() {
-	// The secret.
+	// The secret (s_i).
 	s.s_i.Pick(s.Random)
 
-	// Inner commitment.
+	// Inner commitment (C_i = g^s_i).
 	s.C_i.Mul(nil, s.s_i)
 
-	// Outer commitment.
+	// Outer commitment (C_i_prime = H(C_i)).
 	h := s.Suite.Hash()
 	buf, _ := s.C_i.MarshalBinary()
 	h.Write(buf)
 	s.C_i_p = h.Sum(nil)
 }
 
+// Split the secret into R shares, Q of which are needed to
+// reconstruct the secret.
 func (s *SessionBase) GenerateTrusteeShares() {
+	// Pick a polynomial, with the secret as p(0).
 	s.a_i.Pick(s.Suite, s.Q, s.s_i, s.Random)
-	s.sh_i.Split(s.a_i, s.R)
+
+	// Generate a commitment to the polynomial, allowing shares
+	// of the polynomial to be verified.
 	s.p_i.Commit(s.a_i, nil)
+
+	// Produce the actual shares.
+	s.sh_i.Split(s.a_i, s.R)
 }
 
 func (s *SessionBase) DoTrusteeExchange(i,

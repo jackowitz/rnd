@@ -59,8 +59,8 @@ func main() {
 	context := context.NewContext(suite, random, config)
 
 	if id == 0 {
-		NewLeaderSession(context, *n, *k)
+		NewLeaderSession(context, *n, *k).Start()
 	} else {
-		NewSession(context, *n, *k, *adversary)
+		NewSession(context, *n, *k, *adversary).Start()
 	}
 }

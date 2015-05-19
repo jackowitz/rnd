@@ -18,7 +18,7 @@ type LeaderSession struct {
 	*broadcaster.Broadcaster
 }
 
-func NewLeaderSession(context *context.Context, R, Q int) {
+func NewLeaderSession(context *context.Context, R, Q int) *LeaderSession {
 
 	broadcaster := &broadcaster.Broadcaster {
 		make([]net.Conn, context.N),
@@ -28,30 +28,15 @@ func NewLeaderSession(context *context.Context, R, Q int) {
 		NewSessionBase(context, R, Q),
 		broadcaster,
 	}
-
-	server, err := net.Listen("tcp", context.Self().Addr)
-	if err != nil {
-		panic("Listen: " + err.Error())
-	}
-	incoming := make(chan net.Conn, context.N)
-	go func() {
-		for {
-			conn, err := server.Accept()
-			if err != nil {
-				continue
-			}
-			incoming <- conn
-		}
-	}()
-	session.Start(incoming)
+	return session
 }
 
 var timeout = 3 * time.Second
 
-func (s *LeaderSession) Start(connChan <-chan net.Conn) {
-
-	// Store connection channel away for later.
-	s.ConnChan = connChan
+func (s *LeaderSession) Start() {
+	// Start up any core session stuff, namely a listen
+	// socket for trustee requests later.
+	s.SessionBase.Start()
 
 	// Generate a nonce for the session.
 	s.Nonce = s.Suite.Secret()

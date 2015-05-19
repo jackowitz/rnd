@@ -20,34 +20,22 @@ type Session struct {
 	Conn net.Conn
 }
 
-func NewSession(context *context.Context, R, Q int, isAdversary bool) {
-	scalable := &Session {
+func NewSession(context *context.Context, R, Q int, isAdversary bool) *Session {
+	session := &Session {
 		NewSessionBase(context, R, Q),
 		isAdversary,
 		nil,
 	}
-
-	server, err := net.Listen("tcp", context.Self().Addr)
-	if err != nil {
-		panic("Listen: " + err.Error())
-	}
-	incoming := make(chan net.Conn, context.N)
-	go func() {
-		for {
-			conn, err := server.Accept()
-			if err != nil {
-				continue
-			}
-			incoming <- conn
-		}
-	}()
-	scalable.Start(incoming)
+	return session
 }
 
-func (s *Session) Start(connChan <-chan net.Conn) {
+func (s *Session) Start() {
+	// Start up any core session stuff, namely a listen
+	// socket for trustee requests later.
+	s.SessionBase.Start()
 
 	// Get our connection to the leader.
-	s.Conn = <- connChan
+	s.Conn = <- s.ConnChan
 	buf, err := prefix.ReadPrefix(s.Conn)
 	if err != nil {
 		panic("Reading Nonce: " + err.Error())
@@ -56,10 +44,6 @@ func (s *Session) Start(connChan <-chan net.Conn) {
 	if err = s.Nonce.UnmarshalBinary(buf); err != nil {
 		panic("Decoding Nonce: " + err.Error())
 	}
-
-	// Keep a reference to the channel for accepting
-	// requests later as a trustee.
-	s.ConnChan = connChan
 
 	// Start running the lottery protocol.
 	fmt.Println("Started " + s.Nonce.String())
