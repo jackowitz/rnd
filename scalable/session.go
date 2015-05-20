@@ -84,6 +84,13 @@ func (s *Session) ReceiveSignatureVectorVector() error {
 	if err := broadcaster.ReadOne(s.Conn, message, s.cons); err != nil {
 		return err
 	}
+	// Independently validate that all client's signature vectors
+	// check out.
+	for _, attestation := range message.Signatures {
+		if err := s.validateAttestation(attestation); err != nil {
+			return err
+		}
+	}
 	s.signatureVector = message.Signatures
 	return nil
 }

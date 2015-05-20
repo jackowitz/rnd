@@ -332,6 +332,36 @@ Listen:
 	return nil
 }
 
+// Make sure that there are enough attestations, that the signatures
+// in the attestations are valid and that the trustees were chosen
+// properly.
+func (s *SessionBase) validateAttestation(message *SignatureVectorMessage) error {
+	trustees := s.findTrustees(message.Commit)
+	attestations := 0
+
+	for i, reply := range message.Signatures {
+		// First check that the trustee provided an attestation and
+		// that they were chosen properly.
+		if reply == nil || reply.Trustee != trustees[i] {
+			continue
+		}
+		// Validate the signature on the attestation.
+		signature := reply.Signature
+		reply.Signature = nil
+		data, _ := protobuf.Encode(reply)
+		reply.Signature = signature
+		if err := s.Verify(data, signature, reply.Trustee); err != nil {
+			continue
+		}
+		attestations++
+	}
+	// Make sure that at least Q of the attestations checked out.
+	if attestations < s.Q {
+		return errors.New("Not enough valid trustee attestations.")
+	}
+	return nil
+}
+
 // Perform local calculations to determine the "winning" lottery
 // tickets. In this case, we just do the hashing and then dump
 // each client's "ticket" to the console.
