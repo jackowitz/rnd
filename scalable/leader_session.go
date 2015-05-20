@@ -6,6 +6,7 @@ import (
 	"net"
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/poly"
+	"github.com/dedis/protobuf"
 	"rnd/broadcaster"
 	"rnd/context"
 	"rnd/prefix"
@@ -90,6 +91,36 @@ func (s *LeaderSession) SendHashCommitVector() error {
 	})
 }
 
+// Make sure that there are enough attestations, that the signatures
+// in the attestations are valid and that the trustees were chosen
+// properly.
+func (s *LeaderSession) validateAttestation(message *SignatureVectorMessage) error {
+	trustees := s.findTrustees(message.Commit)
+	attestations := 0
+
+	for i, reply := range message.Signatures {
+		// First check that the trustee provided an attestation and
+		// that they were chosen properly.
+		if reply == nil || reply.Trustee != trustees[i] {
+			continue
+		}
+		// Validate the signature on the attestation.
+		signature := reply.Signature
+		reply.Signature = nil
+		data, _ := protobuf.Encode(reply)
+		reply.Signature = signature
+		if err := s.Verify(data, signature, reply.Trustee); err != nil {
+			continue
+		}
+		attestations++
+	}
+	// Make sure that at least Q of the attestations checked out.
+	if attestations < s.Q {
+		return errors.New("Not enough valid trustee attestations.")
+	}
+	return nil
+}
+
 // Receive a vector of trustee signatures from all of
 // the other clients.
 func (s *LeaderSession) ReceiveSignatureVectors() error {
@@ -105,7 +136,10 @@ func (s *LeaderSession) ReceiveSignatureVectors() error {
 		msgPtr := <- results
 		message, ok := msgPtr.(*SignatureVectorMessage)
 		if message == nil || !ok {
-			return errors.New("EBAD_COMMIT")
+			return errors.New("EBAD_ATTESTATION")
+		}
+		if err := s.validateAttestation(message); err != nil {
+			return err
 		}
 		s.signatureVector[message.Source] = message
 	}

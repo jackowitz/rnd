@@ -36,7 +36,7 @@ type TrusteeShareMessage struct {
 // that they agreed to act as trustee for this particular share.
 type TrusteeSignatureMessage struct {
 	Trustee, Source, Index int
-	//Signature []byte
+	Signature []byte `protobuf:"opt"`
 }
 
 // An individual client's inner commitment (i.e. g^s_i,

@@ -151,14 +151,23 @@ func (s *SessionBase) DoTrusteeExchange(shareIndex,
 		return nil, err
 	}
 
-	// ...and wait to get signature back.
+	// ...and wait to get attestation back.
 	reply := new(TrusteeSignatureMessage)
 	if err := broadcaster.ReadOneTimeout(conn, reply, nil, timeout); err != nil {
 		return nil, err
 	}
-	conn.Close()
+	// Make sure the attestation is properly signed so we can later
+	// prove to others that we followed the protocol.
+	signature := reply.Signature
+	reply.Signature = nil
+	data, _ := protobuf.Encode(reply)
+	if err := s.Verify(data, signature, reply.Trustee); err != nil {
+		return nil, errors.New("EVERIFY")
+	}
+	reply.Signature = signature
 
-	// XXX: verify signature!
+	// Don't need this anymore.
+	conn.Close()
 	return reply, nil
 }
 
@@ -193,6 +202,7 @@ func (s *SessionBase) findTrustees(C_i abstract.Point) []int {
 // (or a timeout).
 func (s *SessionBase) SendTrusteeShares(timeout time.Duration) error {
 
+	s.signatures = make([]*TrusteeSignatureMessage, s.R)
 	results := make(chan *TrusteeSignatureMessage, s.R)
 	expected := s.R
 
@@ -202,6 +212,13 @@ func (s *SessionBase) SendTrusteeShares(timeout time.Duration) error {
 		// we'll say that that's OK.
 		if trustee == s.Mine {
 			expected--
+			reply := &TrusteeSignatureMessage {
+				s.Mine, s.Mine, i, nil,
+			}
+			data, _ := protobuf.Encode(reply)
+			signature := s.Sign(data)
+			reply.Signature = signature
+			s.signatures[i] = reply
 			continue
 		}
 
@@ -219,7 +236,6 @@ func (s *SessionBase) SendTrusteeShares(timeout time.Duration) error {
 	// Wait to get signatures or errors back from all of the
 	// trustees and make sure that at least Q of them were
 	// successful.
-	s.signatures = make([]*TrusteeSignatureMessage, s.R)
 	received := s.R - expected
 	for i := 0; i < expected; i++ {
 		message := <- results
@@ -253,6 +269,29 @@ func (s *SessionBase) HandleSigningRequest(conn net.Conn) error {
 		return err
 	}
 
+	// Check the share against the commitment. We only want provide
+	// attestation if we know it's a valid share we're holding.
+	commitment, ok := message.Commitment.(*poly.PubPoly)
+	if commitment == nil || !ok {
+		return errors.New("Commitment isn't a *poly.PubPoly.")
+	}
+
+	// Make sure this commitment matches the earlier one, in case a
+	// client tries to get sneaky and swap out their secret here.
+	h := s.Suite.Hash()
+	hbuf, _ := commitment.SecretCommit().MarshalBinary()
+	h.Write(hbuf)
+	outer := h.Sum(nil)
+	if !bytes.Equal(outer, s.V_C_p[message.Source]) {
+		return errors.New("Inner commit doesn't match outer.")
+	}
+
+	// Now that we know the polynomial commitment is valid, check the
+	// share against it.
+	if !commitment.Check(message.Index, message.Share) {
+		return errors.New("Share doesn't check against commitment.")
+	}
+
 	// Store the share away so we can produce it later, if needed.
 	key := uint32(message.Source << 16 | message.Index)
 	s.shares[key] = message.Share
@@ -260,8 +299,12 @@ func (s *SessionBase) HandleSigningRequest(conn net.Conn) error {
 	// Reply with our attestation that we are holding this
 	// particular share for the requesting client.
 	reply := &TrusteeSignatureMessage {
-		s.Mine, message.Source, message.Index,
+		s.Mine, message.Source, message.Index, nil,
 	}
+	data, err := protobuf.Encode(reply)
+	signature := s.Sign(data)
+	reply.Signature = signature
+
 	buf, _ := protobuf.Encode(reply)
 	_, err = prefix.WritePrefix(conn, buf)
 	if err != nil {
