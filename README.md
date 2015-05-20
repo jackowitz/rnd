@@ -11,6 +11,6 @@ git checkout cleanup
 ```
 #### Running Locally
 Each protocol (small/scalable) has a ```local.sh``` script that handles
-building the executable starting and stopping a local instance of the protocol.
-The ```./local.sh start``` command take two positional arguments specifying the
+building the executable and starting/stopping a local instance of the protocol.
+The ```./local.sh start``` command takes two positional arguments specifying the
 ```k``` and ```n``` values, respectively.
