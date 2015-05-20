@@ -147,6 +147,11 @@ func (s *Session) ReceiveSecretVector() error {
 	if err := broadcaster.ReadOne(s.Conn, message, s.cons); err != nil {
 		return err
 	}
+	for i, secret := range message.Secrets {
+		if !s.checkSecret(secret, i) {
+			return errors.New("Somehow still got a bad secret?!")
+		}
+	}
 	s.secretVector = message.Secrets
 	return nil
 }

@@ -138,7 +138,7 @@ func (s *LeaderSession) ReceiveSecrets() error {
 	for pending := s.N-1; pending > 0; pending-- {
 		msgPtr := <- results
 		message, ok := msgPtr.(*SecretMessage)
-		if ok && message != nil {
+		if !(message == nil || !ok || !s.checkSecret(message.Secret, message.Source)) {
 			s.secretVector[message.Source] = message.Secret
 		}
 	}

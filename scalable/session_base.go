@@ -362,6 +362,12 @@ func (s *SessionBase) validateAttestation(message *SignatureVectorMessage) error
 	return nil
 }
 
+// Check a secret against the appropriate inner commitment.
+func (s *SessionBase) checkSecret(secret abstract.Secret, source int) bool {
+	inner := s.signatureVector[source].Commit
+	return s.Suite.Point().Mul(nil, secret).Equal(inner)
+}
+
 // Perform local calculations to determine the "winning" lottery
 // tickets. In this case, we just do the hashing and then dump
 // each client's "ticket" to the console.
