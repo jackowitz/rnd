@@ -20,7 +20,7 @@ type Session struct {
 	*context.Context
 	*broadcaster.Broadcaster
 
-	Nonce Nonce
+	nonce Nonce
 	cons protobuf.Constructors
 
 	r_i abstract.Secret
@@ -91,52 +91,45 @@ func (s *Session) GenerateRandom() ([]byte, *stopwatch.Stopwatch) {
 	stopwatch := stopwatch.NewStopwatch()
 	stopwatch.Start()
 	s.GenerateInitialShares()
-	stopwatch.Stop("PickSplitCommit")
+	stopwatch.Lap("PickSplitCommit")
 
-	stopwatch.Start()
 	if err := s.SendShareCommitMessages(); err != nil {
 		panic("SendShareCommitMessages: " + err.Error())
 	}
-	stopwatch.Stop("SendCommits")
+	stopwatch.Lap("SendCommits")
 
-	stopwatch.Start()
 	status := SUCCESS
 	if err := s.ReceiveShareCommitMessages(); err != nil {
 		panic("ReceiveShareCommitMessages: " + err.Error())
 		status = FAILURE
 	}
-	stopwatch.Stop("ReceiveCommits")
+	stopwatch.Lap("ReceiveCommits")
 
-	stopwatch.Start()
 	if err := s.SendStatusMessages(status); err != nil {
 		panic("SendStatusMessages: " + err.Error())
 	}
-	stopwatch.Stop("SendStatus")
+	stopwatch.Lap("SendStatus")
 
-	stopwatch.Start()
 	if err := s.ReceiveStatusMessages(); err != nil {
 		panic("ReceiveStatusMessages: " + err.Error())
 	}
-	stopwatch.Stop("ReceiveStatus")
+	stopwatch.Lap("ReceiveStatus")
 
-	stopwatch.Start()
 	if err := s.SendShareMessages(); err != nil {
 		panic("SendShareMessages: " + err.Error())
 	}
-	stopwatch.Stop("SendShares")
+	stopwatch.Lap("SendShares")
 
-	stopwatch.Start()
 	if err := s.ReceiveShareMessages(); err != nil {
 		panic("ReceiveShareMessages: " + err.Error())
 	}
-	stopwatch.Stop("ReceiveShares")
+	stopwatch.Lap("ReceiveShares")
 
-	stopwatch.Start()
 	value, err :=  s.CombineShares()
 	if err != nil {
 		panic("CombineShares: " + err.Error())
 	}
-	stopwatch.Stop("CombineShares")
+	stopwatch.Lap("CombineShares")
 	total.Stop("Total")
 
 	return value, total
@@ -155,7 +148,7 @@ func (s *Session) Start(connChan <-chan net.Conn,
 			panic(fmt.Sprintf(format, s.Peers[i].Addr))
 		}
 		// Send the session Nonce.
-		buf, _ := s.Nonce.MarshalBinary()
+		buf, _ := s.nonce.MarshalBinary()
 		if _, err := prefix.WritePrefix(conn, buf); err != nil {
 			panic("Writing Nonce: " + err.Error())
 		}
@@ -182,7 +175,7 @@ func (s *Session) Start(connChan <-chan net.Conn,
 	}
 
 	// No more connections for this session.
-	close <- s.Nonce
+	close <- s.nonce
 
 	// Everyone's all wired up, start the protocol.
 	value, stopwatch := s.GenerateRandom()
@@ -198,7 +191,7 @@ func (s *Session) Start(connChan <-chan net.Conn,
 	}
 
 	if debug {
-		format := "[%d, %d] %s\n"
+		format := "[%d, %d]\n%s\n"
 		fmt.Printf(format, s.N, s.K, stopwatch)
 	}
 }
@@ -228,7 +221,7 @@ type ShareCommitMessage struct {
 
 func (s *Session) SendShareCommitMessages() error {
 	return s.Broadcast(func (i int) interface{} {
-		message := &ShareCommitMessage{ s.Nonce, i,
+		message := &ShareCommitMessage{ s.nonce, i,
 				s.Mine, s.s_i.Share(i), s.p_i, nil }
 		data, err := protobuf.Encode(message)
 		if err != nil {
@@ -312,7 +305,7 @@ type StatusMessage struct {
 }
 
 func (s *Session) SendStatusMessages(status Status) error {
-	message := &StatusMessage{ s.Nonce, s.Mine, status, nil }
+	message := &StatusMessage{ s.nonce, s.Mine, status, nil }
 	data, _ := protobuf.Encode(message)
 	signature := s.Sign(data)
 	message.Signature = signature
@@ -376,7 +369,7 @@ func (s *Session) SendShareMessages() error {
 	}
 
 	// Sign the message and send it out.
-	message := &ShareMessage{ s.Nonce, s.Mine, s.r_i, shares, nil }
+	message := &ShareMessage{ s.nonce, s.Mine, s.r_i, shares, nil }
 	data, _ := protobuf.Encode(message)
 	signature := s.Sign(data)
 	message.Signature = signature
